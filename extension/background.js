@@ -5,6 +5,7 @@ const DEFAULTS = {
 };
 
 let socket = null;
+let socketGeneration = 0;
 let reconnectTimer = null;
 let attachedTabId = null;
 let attachedTab = {};
@@ -90,6 +91,7 @@ async function connect() {
   clearTimeout(reconnectTimer);
   lastSettings = await chrome.storage.local.get(DEFAULTS);
   const url = `ws://${lastSettings.host}:${lastSettings.port}/relay?token=${encodeURIComponent(lastSettings.token)}`;
+  const generation = ++socketGeneration;
 
   try {
     socket = new WebSocket(url);
@@ -99,22 +101,26 @@ async function connect() {
   }
 
   socket.onopen = () => {
+    if (generation !== socketGeneration) return;
     setBadge(attachedTabId ? "on" : "idle", attachedTabId ? "#137333" : "#fbbc04");
     sendState();
   };
 
   socket.onmessage = (event) => {
+    if (generation !== socketGeneration) return;
     handleCommand(event.data).catch((error) => {
       console.error("Aionda Browser MCP command failed", error);
     });
   };
 
   socket.onclose = () => {
+    if (generation !== socketGeneration) return;
     setBadge("off", "#777777");
     scheduleReconnect();
   };
 
   socket.onerror = () => {
+    if (generation !== socketGeneration) return;
     try {
       socket.close();
     } catch {
