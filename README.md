@@ -1,6 +1,6 @@
-# Aionda Browse MCP
+# Aionda Browser MCP
 
-Aionda Browse MCP is a small Chrome extension plus local MCP server for browser automation when Chrome DevTools Protocol is unavailable or blocked by the page.
+Aionda Browser MCP is a small Chrome extension plus local MCP server for browser automation when Chrome DevTools Protocol is unavailable or blocked by the page.
 
 The extension attaches the active Chrome tab to a localhost WebSocket relay. Claude Code, Codex, or another MCP client talks to the local MCP server over stdio. Browser actions are executed through normal extension/content-script APIs, not through DevTools.
 
@@ -21,7 +21,7 @@ This is an early MVP. It supports one attached tab at a time and exposes the cor
 ## Install
 
 ```bash
-cd ~/dev/aionda-browse-mcp
+cd ~/dev/aionda-browser-mcp
 npm install
 npm run build
 ```
@@ -31,12 +31,12 @@ Then load the Chrome extension:
 1. Open `chrome://extensions`.
 2. Enable Developer mode.
 3. Click "Load unpacked".
-4. Select `~/dev/aionda-browse-mcp/extension`.
+4. Select `~/dev/aionda-browser-mcp/extension`.
 
 Start the MCP server:
 
 ```bash
-node ~/dev/aionda-browse-mcp/dist/server.js
+node ~/dev/aionda-browser-mcp/dist/server.js
 ```
 
 Click the extension toolbar icon on the browser tab you want to control. The badge changes to `on` when a tab is attached.
@@ -48,11 +48,11 @@ Example config:
 ```json
 {
   "mcpServers": {
-    "aionda-browse": {
+    "aionda-browser": {
       "command": "node",
-      "args": ["/Users/saf/dev/aionda-browse-mcp/dist/server.js"],
+      "args": ["/Users/saf/dev/aionda-browser-mcp/dist/server.js"],
       "env": {
-        "AIONDA_BROWSE_TOKEN": "aionda-browse-dev"
+        "AIONDA_BROWSER_TOKEN": "aionda-browser-dev"
       }
     }
   }
@@ -63,7 +63,7 @@ The extension options page must use the same token as the server. Defaults:
 
 - Host: `127.0.0.1`
 - Port: `18792`
-- Token: `aionda-browse-dev`
+- Token: `aionda-browser-dev`
 
 ## Why This Exists
 

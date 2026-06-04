@@ -1,18 +1,18 @@
 {
-  "name": "aionda-browse-mcp",
+  "name": "aionda-browser-mcp",
   "version": "0.1.0",
   "description": "Chrome extension relay plus MCP server for browser automation without Chrome DevTools.",
   "type": "module",
-  "homepage": "https://github.com/ferraro/aionda-browse-mcp#readme",
+  "homepage": "https://github.com/ferraro/aionda-browser-mcp#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ferraro/aionda-browse-mcp.git"
+    "url": "git+https://github.com/ferraro/aionda-browser-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/ferraro/aionda-browse-mcp/issues"
+    "url": "https://github.com/ferraro/aionda-browser-mcp/issues"
   },
   "bin": {
-    "aionda-browse-mcp": "dist/server.js"
+    "aionda-browser-mcp": "dist/server.js"
   },
   "files": [
     "dist",

@@ -1,7 +1,7 @@
 const DEFAULTS = {
   host: "127.0.0.1",
   port: 18792,
-  token: "aionda-browse-dev",
+  token: "aionda-browser-dev",
 };
 
 const host = document.getElementById("host");

@@ -1,7 +1,7 @@
 const DEFAULTS = {
   host: "127.0.0.1",
   port: 18792,
-  token: "aionda-browse-dev",
+  token: "aionda-browser-dev",
 };
 
 let socket = null;
@@ -75,7 +75,7 @@ async function connect() {
 
   socket.onmessage = (event) => {
     handleCommand(event.data).catch((error) => {
-      console.error("Aionda Browse MCP command failed", error);
+      console.error("Aionda Browser MCP command failed", error);
     });
   };
 

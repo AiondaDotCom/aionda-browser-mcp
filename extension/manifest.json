@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Aionda Browse MCP",
+  "name": "Aionda Browser MCP",
   "version": "0.1.0",
   "description": "Attach a Chrome tab to a local MCP browser automation relay.",
   "action": {
-    "default_title": "Attach tab to Aionda Browse MCP"
+    "default_title": "Attach tab to Aionda Browser MCP"
   },
   "background": {
     "service_worker": "background.js",
