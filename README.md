@@ -16,6 +16,7 @@ This is an early MVP. It supports one attached tab at a time and exposes the cor
 - `browser_press_key`
 - `browser_navigate`
 - `browser_screenshot`
+- `browser_screenshot_fast`
 - `browser_evaluate`
 
 ## Install
@@ -40,6 +41,8 @@ node ~/dev/aionda-browser-mcp/dist/server.js
 ```
 
 Click the extension toolbar icon on the browser tab you want to control. The badge changes to `on` when a tab is attached.
+
+Use `browser_screenshot_fast` for quick visual parsing. It focuses the attached tab, captures the visible viewport, downsizes it to 960px width by default, and returns a compressed JPEG image. Use `browser_screenshot` when you need the original PNG data URL.
 
 ## MCP Client Configuration
 

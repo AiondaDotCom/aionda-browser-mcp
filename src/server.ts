@@ -111,6 +111,18 @@ browserServer.tool(
 );
 
 browserServer.tool(
+  "browser_screenshot_fast",
+  "Capture a small screenshot of the attached tab for quick visual parsing. Defaults to a 960px-wide JPEG.",
+  {
+    maxWidth: z.number().int().min(320).max(1920).optional(),
+    maxHeight: z.number().int().min(0).max(2160).optional(),
+    quality: z.number().int().min(1).max(100).optional(),
+    format: z.enum(["jpeg", "png"]).optional(),
+  },
+  async ({ maxWidth, maxHeight, quality, format }) => imageResult(await sendCommand("screenshotFast", compactPayload({ maxWidth, maxHeight, quality, format }), 20000))
+);
+
+browserServer.tool(
   "browser_evaluate",
   "Run JavaScript in the attached tab content-script context. Use only for trusted pages.",
   { code: z.string() },
@@ -238,6 +250,33 @@ function textResult(value: JsonValue | ExtensionState) {
 
 function errorResult(message: string) {
   return { content: [{ type: "text" as const, text: message }], isError: true };
+}
+
+function imageResult(value: JsonValue) {
+  if (!isRecord(value) || typeof value.dataUrl !== "string") return textResult(value);
+
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(value.dataUrl);
+  if (!match) return textResult(value);
+
+  const { dataUrl: _dataUrl, ...metadata } = value;
+  return {
+    content: [
+      { type: "image" as const, data: match[2], mimeType: match[1] },
+      { type: "text" as const, text: JSON.stringify(metadata, null, 2) },
+    ],
+  };
+}
+
+function isRecord(value: JsonValue): value is { [key: string]: JsonValue } {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function compactPayload(payload: Record<string, JsonValue | undefined>): JsonValue {
+  const result: { [key: string]: JsonValue } = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (value !== undefined) result[key] = value;
+  }
+  return result;
 }
 
 function parseOptions(args: string[]): ServerOptions {

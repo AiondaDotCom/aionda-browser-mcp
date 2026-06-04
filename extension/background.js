@@ -165,8 +165,18 @@ async function runCommand(command, payload) {
     }
 
     if (command === "screenshot") {
-      const dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format: "png" });
-      return ok({ dataUrl });
+      const screenshot = await captureAttachedTab({ format: "png" });
+      return ok(screenshot);
+    }
+
+    if (command === "screenshotFast") {
+      const screenshot = await captureAttachedTab({
+        format: payload.format === "png" ? "png" : "jpeg",
+        quality: clampNumber(payload.quality, 1, 100, 55),
+        maxWidth: clampNumber(payload.maxWidth, 320, 1920, 960),
+        maxHeight: clampNumber(payload.maxHeight, 0, 2160, 0),
+      });
+      return ok(screenshot);
     }
 
     await ensureContentScript(attachedTabId);
@@ -188,6 +198,93 @@ async function ensureContentScript(tabId) {
       files: ["content.js"],
     });
   }
+}
+
+async function captureAttachedTab(options) {
+  const tab = await chrome.tabs.get(attachedTabId);
+  if (!isScriptableUrl(tab.url)) throw new Error(unsupportedUrlMessage(tab.url));
+
+  await chrome.tabs.update(attachedTabId, { active: true });
+  await chrome.windows.update(tab.windowId, { focused: true });
+  await sleep(100);
+
+  const captureOptions = options.format === "png"
+    ? { format: "png" }
+    : { format: "jpeg", quality: options.quality };
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, captureOptions);
+  return await resizeScreenshot(dataUrl, options);
+}
+
+async function resizeScreenshot(dataUrl, options) {
+  const blob = await dataUrlToBlob(dataUrl);
+  const bitmap = await createImageBitmap(blob);
+  const originalWidth = bitmap.width;
+  const originalHeight = bitmap.height;
+  const maxWidth = options.maxWidth || originalWidth;
+  const maxHeight = options.maxHeight || originalHeight;
+  const scale = Math.min(1, maxWidth / originalWidth, maxHeight / originalHeight);
+  const width = Math.max(1, Math.round(originalWidth * scale));
+  const height = Math.max(1, Math.round(originalHeight * scale));
+  const mimeType = options.format === "png" ? "image/png" : "image/jpeg";
+
+  if (width === originalWidth && height === originalHeight && blob.type === mimeType) {
+    bitmap.close();
+    return {
+      dataUrl,
+      mimeType,
+      width,
+      height,
+      originalWidth,
+      originalHeight,
+      format: options.format,
+      quality: options.format === "png" ? undefined : options.quality,
+    };
+  }
+
+  const canvas = new OffscreenCanvas(width, height);
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Unable to create screenshot canvas context.");
+  context.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close();
+
+  const outputBlob = await canvas.convertToBlob({
+    type: mimeType,
+    quality: options.format === "png" ? undefined : options.quality / 100,
+  });
+
+  return {
+    dataUrl: await blobToDataUrl(outputBlob),
+    mimeType,
+    width,
+    height,
+    originalWidth,
+    originalHeight,
+    format: options.format,
+    quality: options.format === "png" ? undefined : options.quality,
+  };
+}
+
+async function dataUrlToBlob(dataUrl) {
+  return await (await fetch(dataUrl)).blob();
+}
+
+async function blobToDataUrl(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return `data:${blob.type};base64,${btoa(binary)}`;
+}
+
+function clampNumber(value, min, max, fallback) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function tabToState(tab, attached, error) {
