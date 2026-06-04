@@ -41,7 +41,7 @@ Start the MCP server:
 node ~/dev/aionda-browser-mcp/dist/server.js
 ```
 
-Click the extension toolbar icon on the browser tab you want to control. The badge changes to `on` when a tab is attached.
+The extension automatically attaches the active normal `http(s)` tab when the relay connects or when you switch tabs. The badge changes to `on` when a tab is attached. Clicking the toolbar icon manually re-attaches the current tab.
 
 Use `browser_screenshot_fast` for quick visual parsing. It focuses the attached tab, captures the visible viewport, downsizes it to 960px width by default, and returns a compressed JPEG image. You can lower `maxWidth`, set `grayscale: true`, or set `maxBytes` to reduce payload size further. Use `browser_screenshot` when you need the original PNG data URL.
 

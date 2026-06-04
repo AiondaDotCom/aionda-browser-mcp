@@ -25,31 +25,15 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab.id) return;
-
-  if (!isScriptableUrl(tab.url)) {
-    attachedTabId = null;
-    attachedTab = tabToState(tab, false, unsupportedUrlMessage(tab.url));
-    setBadge("no", "#d93025");
-    sendState();
-    return;
-  }
-
-  try {
-    attachedTabId = tab.id;
-    attachedTab = tabToState(tab, true);
-    await ensureContentScript(tab.id);
-    setBadge("on", "#137333");
-  } catch (error) {
-    attachedTabId = null;
-    attachedTab = tabToState(tab, false, error instanceof Error ? error.message : String(error));
-    setBadge("no", "#d93025");
-  }
-
-  sendState();
+  await attachTab(tab);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (tab.active && changeInfo.status === "complete") {
+    attachTab(tab).catch(() => {});
+    return;
+  }
+
   if (tabId !== attachedTabId) return;
   if (!isScriptableUrl(tab.url)) {
     attachedTabId = null;
@@ -64,17 +48,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
-  if (tabId !== attachedTabId) return;
   const tab = await chrome.tabs.get(tabId);
-  if (!isScriptableUrl(tab.url)) {
-    attachedTabId = null;
-    attachedTab = tabToState(tab, false, unsupportedUrlMessage(tab.url));
-    setBadge("no", "#d93025");
-    sendState();
-    return;
-  }
-  attachedTab = tabToState(tab, true);
-  sendState();
+  await attachTab(tab);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -102,8 +77,10 @@ async function connect() {
 
   socket.onopen = () => {
     if (generation !== socketGeneration) return;
-    setBadge(attachedTabId ? "on" : "idle", attachedTabId ? "#137333" : "#fbbc04");
-    sendState();
+    attachActiveTab().catch(() => {
+      setBadge(attachedTabId ? "on" : "idle", attachedTabId ? "#137333" : "#fbbc04");
+      sendState();
+    });
   };
 
   socket.onmessage = (event) => {
@@ -137,6 +114,43 @@ function reconnect() {
 function scheduleReconnect() {
   clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(connect, 1500);
+}
+
+async function attachActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab) {
+    attachedTabId = null;
+    attachedTab = { attached: false, version: chrome.runtime.getManifest().version };
+    setBadge("idle", "#fbbc04");
+    sendState();
+    return;
+  }
+  await attachTab(tab);
+}
+
+async function attachTab(tab) {
+  if (!tab.id) return;
+
+  if (!isScriptableUrl(tab.url)) {
+    attachedTabId = null;
+    attachedTab = tabToState(tab, false, unsupportedUrlMessage(tab.url));
+    setBadge("no", "#d93025");
+    sendState();
+    return;
+  }
+
+  try {
+    attachedTabId = tab.id;
+    attachedTab = tabToState(tab, true);
+    await ensureContentScript(tab.id);
+    setBadge("on", "#137333");
+  } catch (error) {
+    attachedTabId = null;
+    attachedTab = tabToState(tab, false, error instanceof Error ? error.message : String(error));
+    setBadge("no", "#d93025");
+  }
+
+  sendState();
 }
 
 async function handleCommand(raw) {
