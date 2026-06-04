@@ -31,6 +31,8 @@
         });
       case "click":
         return click(payload.ref, payload.button ?? "left");
+      case "clickAt":
+        return clickAt(payload.x, payload.y, payload.button ?? "left");
       case "type":
         return typeInto(payload.ref, payload.text ?? "", payload.clear === true, payload.submit === true);
       case "pressKey":
@@ -112,7 +114,19 @@
       "[aria-label]",
       "[aria-labelledby]",
     ].join(",");
-    return Array.from(document.querySelectorAll(selector));
+    return collectCandidatesInDocument(document, selector);
+  }
+
+  function collectCandidatesInDocument(rootDocument, selector) {
+    const candidates = Array.from(rootDocument.querySelectorAll(selector));
+    for (const iframe of rootDocument.querySelectorAll("iframe")) {
+      try {
+        if (iframe.contentDocument) candidates.push(...collectCandidatesInDocument(iframe.contentDocument, selector));
+      } catch {
+        // Cross-origin iframes cannot be inspected from the content script.
+      }
+    }
+    return candidates;
   }
 
   function click(ref, button) {
@@ -128,6 +142,47 @@
     element.dispatchEvent(new MouseEvent("mouseup", mouseOptions()));
     element.click();
     return { clicked: ref, button };
+  }
+
+  function clickAt(x, y, button) {
+    const pointX = clampNumber(x, 0, innerWidth, Math.round(innerWidth / 2));
+    const pointY = clampNumber(y, 0, innerHeight, Math.round(innerHeight / 2));
+    const element = targetFromPoint(document, pointX, pointY);
+    if (!element) throw new Error(`No element at viewport coordinates ${pointX},${pointY}.`);
+
+    if (element instanceof HTMLElement || element instanceof SVGElement) {
+      element.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+    }
+
+    const options = mouseOptions({ clientX: pointX, clientY: pointY, button: mouseButton(button) });
+    const target = element instanceof Element ? element : document.body;
+
+    if (button === "right") {
+      target.dispatchEvent(new MouseEvent("contextmenu", options));
+      return { clickedAt: { x: pointX, y: pointY }, tag: target.tagName?.toLowerCase(), button };
+    }
+
+    target.dispatchEvent(new PointerEvent("pointerdown", { ...options, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+    target.dispatchEvent(new MouseEvent("mousedown", options));
+    target.dispatchEvent(new PointerEvent("pointerup", { ...options, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+    target.dispatchEvent(new MouseEvent("mouseup", options));
+    target.dispatchEvent(new MouseEvent("click", options));
+    if (typeof target.click === "function") target.click();
+    return { clickedAt: { x: pointX, y: pointY }, tag: target.tagName?.toLowerCase(), button };
+  }
+
+  function targetFromPoint(rootDocument, x, y) {
+    const element = rootDocument.elementFromPoint(x, y);
+    if (!(element instanceof HTMLIFrameElement)) return element;
+
+    try {
+      const iframeDocument = element.contentDocument;
+      if (!iframeDocument) return element;
+      const rect = element.getBoundingClientRect();
+      return targetFromPoint(iframeDocument, x - rect.left, y - rect.top) || element;
+    } catch {
+      return element;
+    }
   }
 
   function typeInto(ref, text, clear, submit) {
@@ -302,8 +357,14 @@
     return normalized;
   }
 
-  function mouseOptions() {
-    return { bubbles: true, cancelable: true, view: window };
+  function mouseOptions(overrides = {}) {
+    return { bubbles: true, cancelable: true, view: window, ...overrides };
+  }
+
+  function mouseButton(button) {
+    if (button === "middle") return 1;
+    if (button === "right") return 2;
+    return 0;
   }
 
   function toJsonSafe(value) {

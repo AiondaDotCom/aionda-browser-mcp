@@ -11,21 +11,32 @@ let attachedTabId = null;
 let attachedTab = {};
 let lastSettings = { ...DEFAULTS };
 
+const RECONNECT_ALARM = "aionda-browser-mcp-reconnect";
+
 chrome.runtime.onInstalled.addListener(async () => {
   const stored = await chrome.storage.local.get(DEFAULTS);
   await chrome.storage.local.set({ ...DEFAULTS, ...stored });
   setBadge("off", "#777777");
+  startReconnectAlarm();
   connect();
 });
 
-chrome.runtime.onStartup.addListener(connect);
+chrome.runtime.onStartup.addListener(() => {
+  startReconnectAlarm();
+  connect();
+});
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes.host || changes.port || changes.token) reconnect();
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
+  if (!isSocketOpen()) connect();
   await attachTab(tab);
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === RECONNECT_ALARM && !isSocketOpen()) connect();
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -61,6 +72,15 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 connect();
+startReconnectAlarm();
+
+function startReconnectAlarm() {
+  chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.25 });
+}
+
+function isSocketOpen() {
+  return socket?.readyState === WebSocket.OPEN;
+}
 
 async function connect() {
   clearTimeout(reconnectTimer);
@@ -77,7 +97,8 @@ async function connect() {
 
   socket.onopen = () => {
     if (generation !== socketGeneration) return;
-    attachActiveTab().catch(() => {
+    attachActiveTab().catch((error) => {
+      attachedTab = { attached: false, version: chrome.runtime.getManifest().version, error: error instanceof Error ? error.message : String(error) };
       setBadge(attachedTabId ? "on" : "idle", attachedTabId ? "#137333" : "#fbbc04");
       sendState();
     });
@@ -117,15 +138,36 @@ function scheduleReconnect() {
 }
 
 async function attachActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] });
+  const tabs = windows.flatMap((window) => window.tabs || []).filter((tab) => tab.active);
+  const tab = tabs.find((candidate) => isScriptableUrl(candidate.url)) || tabs[0];
   if (!tab) {
     attachedTabId = null;
-    attachedTab = { attached: false, version: chrome.runtime.getManifest().version };
+    attachedTab = { attached: false, version: chrome.runtime.getManifest().version, error: "No active normal Chrome tab found." };
     setBadge("idle", "#fbbc04");
     sendState();
     return;
   }
   await attachTab(tab);
+}
+
+async function findAttachableTab(urlContains) {
+  const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] });
+  const tabs = windows.flatMap((window) => window.tabs || []);
+  const needle = typeof urlContains === "string" ? urlContains : "";
+  return tabs.find((tab) => isScriptableUrl(tab.url) && (!needle || (tab.url || "").includes(needle))) || null;
+}
+
+async function listVisibleTabs() {
+  const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] });
+  return windows.flatMap((window) => (window.tabs || []).map((tab) => ({
+    id: tab.id,
+    windowId: tab.windowId,
+    active: tab.active === true,
+    title: tab.title || "",
+    url: tab.url || "",
+    scriptable: isScriptableUrl(tab.url),
+  })));
 }
 
 async function attachTab(tab) {
@@ -169,6 +211,22 @@ async function handleCommand(raw) {
 
 async function runCommand(command, payload) {
   try {
+    if (command === "reloadExtension") {
+      setTimeout(() => chrome.runtime.reload(), 100);
+      return ok({ reloading: true });
+    }
+
+    if (command === "attach") {
+      const tab = await findAttachableTab(payload.urlContains);
+      if (!tab) throw new Error(payload.urlContains ? `No scriptable tab matching "${payload.urlContains}" found.` : "No scriptable tab found.");
+      await attachTab(tab);
+      return ok(attachedTab);
+    }
+
+    if (command === "listTabs") {
+      return ok(await listVisibleTabs());
+    }
+
     if (!attachedTabId) throw new Error("No tab is attached. Click the extension icon on the target tab.");
 
     if (command === "navigate") {
@@ -195,12 +253,51 @@ async function runCommand(command, payload) {
       return ok(screenshot);
     }
 
+    if (command === "clickAt") {
+      return ok(await dispatchMouseClick(attachedTabId, payload));
+    }
+
     await ensureContentScript(attachedTabId);
-    const result = await chrome.tabs.sendMessage(attachedTabId, { command, payload });
+    const result = await sendCommandToAttachedFrames(attachedTabId, command, payload);
     if (result && result.ok === false) return result;
     return ok(result ?? null);
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function dispatchMouseClick(tabId, payload) {
+  const x = clampNumber(payload.x, 0, 10000, 0);
+  const y = clampNumber(payload.y, 0, 10000, 0);
+  const button = payload.button === "right" ? "right" : payload.button === "middle" ? "middle" : "left";
+  const target = { tabId };
+  const tab = await chrome.tabs.get(tabId);
+
+  await chrome.tabs.update(tabId, { active: true });
+  await chrome.windows.update(tab.windowId, { focused: true });
+  await sleep(100);
+
+  await chrome.debugger.attach(target, "1.3");
+  try {
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x,
+      y,
+      button,
+      buttons: button === "left" ? 1 : button === "right" ? 2 : 4,
+      clickCount: 1,
+    });
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x,
+      y,
+      button,
+      buttons: 0,
+      clickCount: 1,
+    });
+    return { clickedAt: { x, y }, button, method: "debugger" };
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
   }
 }
 
@@ -210,9 +307,37 @@ async function ensureContentScript(tabId) {
     return;
   } catch {
     await chrome.scripting.executeScript({
-      target: { tabId },
+      target: { tabId, allFrames: true },
       files: ["content.js"],
     });
+  }
+}
+
+async function sendCommandToAttachedFrames(tabId, command, payload) {
+  const frames = await getFrames(tabId);
+  let lastError = null;
+
+  for (const frame of frames) {
+    try {
+      const result = await chrome.tabs.sendMessage(tabId, { command, payload }, { frameId: frame.frameId });
+      if (!result || result.ok !== false) return result;
+      lastError = result.error || null;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  if (lastError) throw new Error(lastError);
+  throw new Error("No frame handled the browser command.");
+}
+
+async function getFrames(tabId) {
+  if (!chrome.webNavigation?.getAllFrames) return [{ frameId: 0 }];
+  try {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId });
+    return [{ frameId: 0 }, ...(frames || []).filter((frame) => frame.frameId !== 0)];
+  } catch {
+    return [{ frameId: 0 }];
   }
 }
 

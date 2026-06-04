@@ -69,6 +69,17 @@ browserServer.tool("browser_tab", "Return the currently attached browser tab.", 
 });
 
 browserServer.tool(
+  "browser_attach",
+  "Attach a Chrome tab. Optionally provide urlContains to select a tab by URL substring.",
+  { urlContains: z.string().optional() },
+  async ({ urlContains }) => textResult(await sendCommand("attach", compactPayload({ urlContains }), 5000))
+);
+
+browserServer.tool("browser_list_tabs", "List normal Chrome tabs visible to the extension.", {}, async () => {
+  return textResult(await sendCommand("listTabs", {}, 5000));
+});
+
+browserServer.tool(
   "browser_snapshot",
   "Get a text and element snapshot from the attached tab. Use element refs with click/type tools.",
   {},
@@ -95,6 +106,18 @@ browserServer.tool(
   { ref: z.string(), button: z.enum(["left", "middle", "right"]).optional() },
   async ({ ref, button }) => textResult(await sendCommand("click", { ref, button: button ?? "left" }))
 );
+
+browserServer.tool(
+  "browser_click_at",
+  "Click viewport coordinates in the attached tab. Use when the page renders visible controls that are missing from snapshots.",
+  { x: z.number(), y: z.number(), button: z.enum(["left", "middle", "right"]).optional() },
+  async ({ x, y, button }) => textResult(await sendCommand("clickAt", { x, y, button: button ?? "left" }))
+);
+
+browserServer.tool("browser_extension_reload", "Reload the Chrome extension and let it reconnect to the relay.", {}, async () => {
+  const result = await sendCommand("reloadExtension", {}, 2000);
+  return textResult(result);
+});
 
 browserServer.tool(
   "browser_type",
@@ -147,43 +170,63 @@ browserServer.tool(
 );
 
 async function main() {
-  startRelayServer(options);
+  await startRelayServer(options);
+
   const transport = new StdioServerTransport();
   await browserServer.connect(transport);
 }
 
-function startRelayServer({ host, port, token }: ServerOptions) {
-  const wss = new WebSocketServer({ host, port, path: "/relay" });
+function startRelayServer({ host, port, token }: ServerOptions): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const wss = new WebSocketServer({ host, port, path: "/relay" });
 
-  wss.on("connection", (socket, request) => {
-    const url = new URL(request.url ?? "/relay", `http://${host}:${port}`);
-    if (!isTokenValid(url.searchParams.get("token"), token)) {
-      socket.close(1008, "invalid token");
-      return;
-    }
-
-    if (extensionSocket && extensionSocket.readyState === WebSocket.OPEN) {
-      extensionSocket.close(1012, "replaced by a newer extension connection");
-    }
-
-    extensionSocket = socket;
-    connectedAt = new Date().toISOString();
-    extensionState = {};
-
-    socket.on("message", (raw) => handleRelayMessage(raw.toString()));
-    socket.on("close", () => {
-      if (extensionSocket === socket) {
-        extensionSocket = null;
-        extensionState = {};
-        connectedAt = null;
-        rejectAllPending("Chrome extension disconnected.");
+    wss.on("error", (error) => {
+      if (isAddressInUseError(error)) {
+        console.error(
+          `aionda-browser-mcp cannot start: 127.0.0.1:${options.port} is already in use. ` +
+            "Stop the existing server first (pkill -f 'aionda-browser-mcp/dist/server.js') and restart the MCP client."
+        );
+      } else {
+        console.error("aionda-browser-mcp relay error:", error);
       }
+      reject(error);
+    });
+
+    wss.on("listening", () => {
+      console.error(`aionda-browser-mcp relay listening on ws://${host}:${port}/relay`);
+      resolve();
+    });
+
+    wss.on("connection", (socket, request) => {
+      const url = new URL(request.url ?? "/relay", `http://${host}:${port}`);
+      if (!isTokenValid(url.searchParams.get("token"), token)) {
+        socket.close(1008, "invalid token");
+        return;
+      }
+
+      if (extensionSocket && extensionSocket.readyState === WebSocket.OPEN) {
+        extensionSocket.close(1012, "replaced by a newer extension connection");
+      }
+
+      extensionSocket = socket;
+      connectedAt = new Date().toISOString();
+      extensionState = {};
+
+      socket.on("message", (raw) => handleRelayMessage(raw.toString()));
+      socket.on("close", () => {
+        if (extensionSocket === socket) {
+          extensionSocket = null;
+          extensionState = {};
+          connectedAt = null;
+          rejectAllPending("Chrome extension disconnected.");
+        }
+      });
     });
   });
+}
 
-  wss.on("listening", () => {
-    console.error(`aionda-browser-mcp relay listening on ws://${host}:${port}/relay`);
-  });
+function isAddressInUseError(error: unknown): boolean {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === "EADDRINUSE";
 }
 
 function handleRelayMessage(raw: string) {
