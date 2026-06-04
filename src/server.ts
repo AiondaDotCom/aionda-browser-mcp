@@ -240,12 +240,12 @@ function errorResult(message: string) {
 }
 
 function parseOptions(args: string[]): ServerOptions {
-  const port = Number(readFlag(args, "--port") ?? process.env.AIONDA_BROWSER_PORT ?? process.env.AIONDA_BROWSE_PORT ?? DEFAULT_PORT);
+  const port = Number(readFlag(args, "--port") ?? process.env.AIONDA_BROWSER_PORT ?? DEFAULT_PORT);
   return {
-    host: readFlag(args, "--host") ?? process.env.AIONDA_BROWSER_HOST ?? process.env.AIONDA_BROWSE_HOST ?? DEFAULT_HOST,
+    host: readFlag(args, "--host") ?? process.env.AIONDA_BROWSER_HOST ?? DEFAULT_HOST,
     port: Number.isFinite(port) ? port : DEFAULT_PORT,
-    token: readFlag(args, "--token") ?? process.env.AIONDA_BROWSER_TOKEN ?? process.env.AIONDA_BROWSE_TOKEN ?? DEFAULT_TOKEN,
-    timeoutMs: Number(readFlag(args, "--timeout-ms") ?? process.env.AIONDA_BROWSER_TIMEOUT_MS ?? process.env.AIONDA_BROWSE_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS),
+    token: readFlag(args, "--token") ?? process.env.AIONDA_BROWSER_TOKEN ?? DEFAULT_TOKEN,
+    timeoutMs: Number(readFlag(args, "--timeout-ms") ?? process.env.AIONDA_BROWSER_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS),
   };
 }
 
