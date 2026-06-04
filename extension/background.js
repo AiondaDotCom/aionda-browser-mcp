@@ -25,15 +25,38 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab.id) return;
-  attachedTabId = tab.id;
-  attachedTab = tabToState(tab, true);
-  await ensureContentScript(tab.id);
-  setBadge("on", "#137333");
+
+  if (!isScriptableUrl(tab.url)) {
+    attachedTabId = null;
+    attachedTab = tabToState(tab, false, unsupportedUrlMessage(tab.url));
+    setBadge("no", "#d93025");
+    sendState();
+    return;
+  }
+
+  try {
+    attachedTabId = tab.id;
+    attachedTab = tabToState(tab, true);
+    await ensureContentScript(tab.id);
+    setBadge("on", "#137333");
+  } catch (error) {
+    attachedTabId = null;
+    attachedTab = tabToState(tab, false, error instanceof Error ? error.message : String(error));
+    setBadge("no", "#d93025");
+  }
+
   sendState();
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (tabId !== attachedTabId) return;
+  if (!isScriptableUrl(tab.url)) {
+    attachedTabId = null;
+    attachedTab = tabToState(tab, false, unsupportedUrlMessage(tab.url));
+    setBadge("no", "#d93025");
+    sendState();
+    return;
+  }
   attachedTab = tabToState(tab, true);
   sendState();
   if (changeInfo.status === "complete") ensureContentScript(tabId).catch(() => {});
@@ -42,6 +65,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   if (tabId !== attachedTabId) return;
   const tab = await chrome.tabs.get(tabId);
+  if (!isScriptableUrl(tab.url)) {
+    attachedTabId = null;
+    attachedTab = tabToState(tab, false, unsupportedUrlMessage(tab.url));
+    setBadge("no", "#d93025");
+    sendState();
+    return;
+  }
   attachedTab = tabToState(tab, true);
   sendState();
 });
@@ -154,14 +184,29 @@ async function ensureContentScript(tabId) {
   }
 }
 
-function tabToState(tab, attached) {
+function tabToState(tab, attached, error) {
   return {
     tabId: tab.id,
     url: tab.url,
     title: tab.title,
     attached,
     version: chrome.runtime.getManifest().version,
+    error,
   };
+}
+
+function isScriptableUrl(url) {
+  if (!url) return false;
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function unsupportedUrlMessage(url) {
+  return `Cannot attach to this URL. Chrome extensions cannot inject content scripts into ${url || "this tab"}. Open a normal http(s) page and click the extension icon there.`;
 }
 
 function sendState() {

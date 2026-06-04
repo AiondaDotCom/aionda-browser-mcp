@@ -19,6 +19,7 @@ type ExtensionState = {
   title?: string;
   attached?: boolean;
   version?: string;
+  error?: string;
 };
 
 type RelayResponse =
