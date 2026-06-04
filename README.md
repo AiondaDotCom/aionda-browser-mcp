@@ -11,6 +11,7 @@ This is an early MVP. It supports one attached tab at a time and exposes the cor
 - `browser_status`
 - `browser_tab`
 - `browser_snapshot`
+- `browser_snapshot_compact`
 - `browser_click`
 - `browser_type`
 - `browser_press_key`
@@ -42,7 +43,9 @@ node ~/dev/aionda-browser-mcp/dist/server.js
 
 Click the extension toolbar icon on the browser tab you want to control. The badge changes to `on` when a tab is attached.
 
-Use `browser_screenshot_fast` for quick visual parsing. It focuses the attached tab, captures the visible viewport, downsizes it to 960px width by default, and returns a compressed JPEG image. Use `browser_screenshot` when you need the original PNG data URL.
+Use `browser_screenshot_fast` for quick visual parsing. It focuses the attached tab, captures the visible viewport, downsizes it to 960px width by default, and returns a compressed JPEG image. You can lower `maxWidth`, set `grayscale: true`, or set `maxBytes` to reduce payload size further. Use `browser_screenshot` when you need the original PNG data URL.
+
+Use `browser_snapshot_compact` instead of `browser_snapshot` when token budget matters. It returns a shorter page text, fewer visible interactive elements, shortened labels, and optional bounds. Use `query` to filter elements by visible text.
 
 ## MCP Client Configuration
 

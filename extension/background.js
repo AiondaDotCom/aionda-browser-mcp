@@ -175,6 +175,8 @@ async function runCommand(command, payload) {
         quality: clampNumber(payload.quality, 1, 100, 55),
         maxWidth: clampNumber(payload.maxWidth, 320, 1920, 960),
         maxHeight: clampNumber(payload.maxHeight, 0, 2160, 0),
+        grayscale: payload.grayscale === true,
+        maxBytes: clampNumber(payload.maxBytes, 0, 2000000, 0),
       });
       return ok(screenshot);
     }
@@ -223,11 +225,11 @@ async function resizeScreenshot(dataUrl, options) {
   const maxWidth = options.maxWidth || originalWidth;
   const maxHeight = options.maxHeight || originalHeight;
   const scale = Math.min(1, maxWidth / originalWidth, maxHeight / originalHeight);
-  const width = Math.max(1, Math.round(originalWidth * scale));
-  const height = Math.max(1, Math.round(originalHeight * scale));
+  let width = Math.max(1, Math.round(originalWidth * scale));
+  let height = Math.max(1, Math.round(originalHeight * scale));
   const mimeType = options.format === "png" ? "image/png" : "image/jpeg";
 
-  if (width === originalWidth && height === originalHeight && blob.type === mimeType) {
+  if (width === originalWidth && height === originalHeight && blob.type === mimeType && !options.grayscale && !options.maxBytes) {
     bitmap.close();
     return {
       dataUrl,
@@ -236,21 +238,29 @@ async function resizeScreenshot(dataUrl, options) {
       height,
       originalWidth,
       originalHeight,
+      bytes: blob.size,
       format: options.format,
       quality: options.format === "png" ? undefined : options.quality,
+      grayscale: false,
+      maxBytes: 0,
     };
   }
 
-  const canvas = new OffscreenCanvas(width, height);
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Unable to create screenshot canvas context.");
-  context.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
+  let quality = (options.quality || 55) / 100;
+  let outputBlob = await renderScreenshotBlob(bitmap, width, height, mimeType, quality, options.grayscale);
+  const maxBytes = options.maxBytes || 0;
 
-  const outputBlob = await canvas.convertToBlob({
-    type: mimeType,
-    quality: options.format === "png" ? undefined : options.quality / 100,
-  });
+  for (let attempt = 0; maxBytes > 0 && outputBlob.size > maxBytes && attempt < 8; attempt += 1) {
+    if (options.format !== "png" && quality > 0.3) {
+      quality = Math.max(0.3, quality - 0.12);
+    } else {
+      width = Math.max(240, Math.round(width * 0.82));
+      height = Math.max(160, Math.round(height * 0.82));
+    }
+    outputBlob = await renderScreenshotBlob(bitmap, width, height, mimeType, quality, options.grayscale);
+  }
+
+  bitmap.close();
 
   return {
     dataUrl: await blobToDataUrl(outputBlob),
@@ -259,9 +269,35 @@ async function resizeScreenshot(dataUrl, options) {
     height,
     originalWidth,
     originalHeight,
+    bytes: outputBlob.size,
     format: options.format,
-    quality: options.format === "png" ? undefined : options.quality,
+    quality: options.format === "png" ? undefined : Math.round(quality * 100),
+    grayscale: options.grayscale === true,
+    maxBytes,
   };
+}
+
+async function renderScreenshotBlob(bitmap, width, height, mimeType, quality, grayscale) {
+  const canvas = new OffscreenCanvas(width, height);
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Unable to create screenshot canvas context.");
+  context.drawImage(bitmap, 0, 0, width, height);
+
+  if (grayscale) {
+    const imageData = context.getImageData(0, 0, width, height);
+    for (let index = 0; index < imageData.data.length; index += 4) {
+      const gray = Math.round(0.299 * imageData.data[index] + 0.587 * imageData.data[index + 1] + 0.114 * imageData.data[index + 2]);
+      imageData.data[index] = gray;
+      imageData.data[index + 1] = gray;
+      imageData.data[index + 2] = gray;
+    }
+    context.putImageData(imageData, 0, 0);
+  }
+
+  return await canvas.convertToBlob({
+    type: mimeType,
+    quality: mimeType === "image/png" ? undefined : quality,
+  });
 }
 
 async function dataUrlToBlob(dataUrl) {

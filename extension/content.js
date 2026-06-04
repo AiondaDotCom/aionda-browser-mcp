@@ -19,7 +19,16 @@
       case "ping":
         return { ok: true };
       case "snapshot":
-        return snapshot();
+        return snapshot({ compact: false });
+      case "snapshotCompact":
+        return snapshot({
+          compact: true,
+          textLimit: clampNumber(payload.textLimit, 0, 12000, 2000),
+          elementLimit: clampNumber(payload.elementLimit, 1, 500, 80),
+          nameLimit: clampNumber(payload.nameLimit, 16, 500, 120),
+          includeBounds: payload.includeBounds === true,
+          query: typeof payload.query === "string" ? payload.query : "",
+        });
       case "click":
         return click(payload.ref, payload.button ?? "left");
       case "type":
@@ -33,42 +42,56 @@
     }
   }
 
-  function snapshot() {
+  function snapshot(options) {
     refs = new Map();
     const elements = [];
     let counter = 0;
     const candidates = collectCandidates();
+    const query = compactText(options.query || "").toLowerCase();
+    const textLimit = options.compact ? options.textLimit : 12000;
+    const nameLimit = options.compact ? options.nameLimit : 0;
+    const elementLimit = options.compact ? options.elementLimit : Number.POSITIVE_INFINITY;
 
     for (const element of candidates) {
       if (!(element instanceof HTMLElement) && !(element instanceof SVGElement)) continue;
       if (!isVisible(element)) continue;
 
       const rect = element.getBoundingClientRect();
+      const text = compactText(elementText(element));
+      const name = accessibleName(element);
+      if (query && !`${name} ${text}`.toLowerCase().includes(query)) continue;
+
       const ref = `e${++counter}`;
       refs.set(ref, element);
-      elements.push({
+      const entry = {
         ref,
         tag: element.tagName.toLowerCase(),
         role: element.getAttribute("role") || inferredRole(element),
-        name: accessibleName(element),
-        text: compactText(elementText(element)),
+        name: limitText(name, nameLimit),
+        text: limitText(text, nameLimit),
         value: formValue(element),
         checked: checkedValue(element),
         disabled: isDisabled(element),
         href: element instanceof HTMLAnchorElement ? element.href : undefined,
-        bounds: {
+      };
+
+      if (!options.compact || options.includeBounds) {
+        entry.bounds = {
           x: Math.round(rect.x),
           y: Math.round(rect.y),
           width: Math.round(rect.width),
           height: Math.round(rect.height),
-        },
-      });
+        };
+      }
+
+      elements.push(entry);
+      if (elements.length >= elementLimit) break;
     }
 
     return {
       url: location.href,
       title: document.title,
-      text: compactText(document.body?.innerText ?? "").slice(0, 12000),
+      text: limitText(compactText(document.body?.innerText ?? ""), textLimit),
       elements,
     };
   }
@@ -202,6 +225,16 @@
 
   function compactText(text) {
     return String(text).replace(/\s+/g, " ").trim();
+  }
+
+  function limitText(text, limit) {
+    if (!limit || text.length <= limit) return text;
+    return `${text.slice(0, Math.max(0, limit - 1))}…`;
+  }
+
+  function clampNumber(value, min, max, fallback) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(value)));
   }
 
   function formValue(element) {

@@ -76,6 +76,20 @@ browserServer.tool(
 );
 
 browserServer.tool(
+  "browser_snapshot_compact",
+  "Get a token-light snapshot of visible interactive elements. Use query to filter by visible text.",
+  {
+    query: z.string().optional(),
+    textLimit: z.number().int().min(0).max(12000).optional(),
+    elementLimit: z.number().int().min(1).max(500).optional(),
+    nameLimit: z.number().int().min(16).max(500).optional(),
+    includeBounds: z.boolean().optional(),
+  },
+  async ({ query, textLimit, elementLimit, nameLimit, includeBounds }) =>
+    textResult(await sendCommand("snapshotCompact", compactPayload({ query, textLimit, elementLimit, nameLimit, includeBounds })))
+);
+
+browserServer.tool(
   "browser_click",
   "Click an element ref from browser_snapshot.",
   { ref: z.string(), button: z.enum(["left", "middle", "right"]).optional() },
@@ -118,8 +132,11 @@ browserServer.tool(
     maxHeight: z.number().int().min(0).max(2160).optional(),
     quality: z.number().int().min(1).max(100).optional(),
     format: z.enum(["jpeg", "png"]).optional(),
+    grayscale: z.boolean().optional(),
+    maxBytes: z.number().int().min(0).max(2000000).optional(),
   },
-  async ({ maxWidth, maxHeight, quality, format }) => imageResult(await sendCommand("screenshotFast", compactPayload({ maxWidth, maxHeight, quality, format }), 20000))
+  async ({ maxWidth, maxHeight, quality, format, grayscale, maxBytes }) =>
+    imageResult(await sendCommand("screenshotFast", compactPayload({ maxWidth, maxHeight, quality, format, grayscale, maxBytes }), 20000))
 );
 
 browserServer.tool(
