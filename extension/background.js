@@ -301,7 +301,15 @@ async function renderScreenshotBlob(bitmap, width, height, mimeType, quality, gr
 }
 
 async function dataUrlToBlob(dataUrl) {
-  return await (await fetch(dataUrl)).blob();
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(dataUrl);
+  if (!match) throw new Error("Unexpected screenshot data URL.");
+
+  const binary = atob(match[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: match[1] });
 }
 
 async function blobToDataUrl(blob) {
