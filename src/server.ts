@@ -169,6 +169,35 @@ browserServer.tool(
   async ({ code }) => textResult(await sendCommand("evaluate", { code }))
 );
 
+browserServer.tool(
+  "browser_scroll",
+  "Scroll the attached tab natively (CSP-safe, no eval). direction up/down scrolls one viewport (or amount pixels); top/bottom jumps to the page start/end. Defaults to down.",
+  {
+    direction: z.enum(["up", "down", "top", "bottom"]).optional(),
+    amount: z.number().int().min(1).max(100000).optional(),
+  },
+  async ({ direction, amount }) => textResult(await sendCommand("scroll", compactPayload({ direction, amount })))
+);
+
+browserServer.tool(
+  "browser_scroll_into_view",
+  "Scroll an element ref from browser_snapshot into the center of the viewport (CSP-safe, no eval).",
+  { ref: z.string() },
+  async ({ ref }) => textResult(await sendCommand("scrollIntoView", { ref }))
+);
+
+browserServer.tool(
+  "browser_upload_file",
+  "Upload local file(s) into a file input on the attached tab via CDP (DOM.setFileInputFiles), bypassing the OS file picker. Paths must be absolute and exist on the machine running Chrome. By default targets the first input[type=file]; pass selector or ref to target a specific input. Only works for inputs in the main frame.",
+  {
+    paths: z.array(z.string()).min(1),
+    selector: z.string().optional(),
+    ref: z.string().optional(),
+  },
+  async ({ paths, selector, ref }) =>
+    textResult(await sendCommand("uploadFiles", compactPayload({ files: paths, selector, ref }), 20000))
+);
+
 async function main() {
   await startRelayServer(options);
 

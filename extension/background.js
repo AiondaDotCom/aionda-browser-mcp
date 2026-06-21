@@ -257,6 +257,10 @@ async function runCommand(command, payload) {
       return ok(await dispatchMouseClick(attachedTabId, payload));
     }
 
+    if (command === "uploadFiles") {
+      return ok(await uploadFiles(attachedTabId, payload));
+    }
+
     await ensureContentScript(attachedTabId);
     const result = await sendCommandToAttachedFrames(attachedTabId, command, payload);
     if (result && result.ok === false) return result;
@@ -298,6 +302,52 @@ async function dispatchMouseClick(tabId, payload) {
     return { clickedAt: { x, y }, button, method: "debugger" };
   } finally {
     await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+// Set local files on a page file input via CDP DOM.setFileInputFiles — this bypasses
+// the OS file picker entirely (the same approach Playwright/Puppeteer use). Paths must
+// be absolute and exist on the machine running Chrome.
+async function uploadFiles(tabId, payload) {
+  const files = Array.isArray(payload.files)
+    ? payload.files.filter((file) => typeof file === "string" && file.length > 0)
+    : [];
+  if (files.length === 0) {
+    throw new Error("uploadFiles requires a non-empty 'files' array of absolute file paths.");
+  }
+
+  // Ask the content script to find and tag the target file input.
+  await ensureContentScript(tabId);
+  const mark = await sendCommandToAttachedFrames(tabId, "markFileInput", {
+    ref: payload.ref,
+    selector: payload.selector,
+  });
+  if (!mark || typeof mark.selector !== "string") {
+    throw new Error("Could not locate a file input on the page.");
+  }
+
+  const target = { tabId };
+  await chrome.debugger.attach(target, "1.3");
+  try {
+    const doc = await chrome.debugger.sendCommand(target, "DOM.getDocument", { depth: 0 });
+    const rootNodeId = doc?.root?.nodeId;
+    if (!rootNodeId) throw new Error("Unable to read the page DOM via the debugger.");
+
+    const found = await chrome.debugger.sendCommand(target, "DOM.querySelector", {
+      nodeId: rootNodeId,
+      selector: mark.selector,
+    });
+    if (!found?.nodeId) throw new Error(`File input not found for selector ${mark.selector}.`);
+
+    await chrome.debugger.sendCommand(target, "DOM.setFileInputFiles", {
+      files,
+      nodeId: found.nodeId,
+    });
+
+    return { uploaded: files.length, files, multiple: mark.multiple === true, method: "debugger" };
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
+    await sendCommandToAttachedFrames(tabId, "unmarkFileInput", { selector: mark.selector }).catch(() => {});
   }
 }
 

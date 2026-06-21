@@ -39,6 +39,14 @@
         return pressKey(payload.key);
       case "evaluate":
         return evaluate(payload.code);
+      case "scroll":
+        return scrollPage(payload.direction, payload.amount);
+      case "scrollIntoView":
+        return scrollRefIntoView(payload.ref);
+      case "markFileInput":
+        return markFileInput(payload.ref, payload.selector);
+      case "unmarkFileInput":
+        return unmarkFileInput(payload.selector);
       default:
         throw new Error(`Unknown command: ${message.command}`);
     }
@@ -232,10 +240,92 @@
     return toJsonSafe(result);
   }
 
+  function scrollPage(direction, amount) {
+    const dir = typeof direction === "string" ? direction.toLowerCase() : "down";
+    const scroller = document.scrollingElement || document.documentElement || document.body;
+    const maxScroll = Math.max(0, (scroller?.scrollHeight ?? 0) - innerHeight);
+    const viewportStep = Math.max(1, innerHeight - 100);
+    const step = typeof amount === "number" && Number.isFinite(amount) && amount > 0 ? Math.round(amount) : viewportStep;
+
+    switch (dir) {
+      case "top":
+        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        break;
+      case "bottom":
+        window.scrollTo({ top: maxScroll, left: 0, behavior: "instant" });
+        break;
+      case "up":
+        window.scrollBy({ top: -step, left: 0, behavior: "instant" });
+        break;
+      case "down":
+      default:
+        window.scrollBy({ top: step, left: 0, behavior: "instant" });
+        break;
+    }
+
+    return scrollMetrics({ direction: dir, amount: dir === "up" || dir === "down" ? step : undefined });
+  }
+
+  function scrollRefIntoView(ref) {
+    const element = resolveRef(ref);
+    element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    return scrollMetrics({ ref });
+  }
+
+  function scrollMetrics(extra) {
+    const scroller = document.scrollingElement || document.documentElement || document.body;
+    return {
+      ...extra,
+      scrollX: Math.round(window.scrollX),
+      scrollY: Math.round(window.scrollY),
+      innerHeight: Math.round(innerHeight),
+      scrollHeight: Math.round(scroller?.scrollHeight ?? 0),
+      atTop: window.scrollY <= 0,
+      atBottom: window.scrollY + innerHeight >= (scroller?.scrollHeight ?? 0) - 1,
+    };
+  }
+
   function resolveRef(ref) {
     const element = refs.get(ref);
     if (!element) throw new Error(`Unknown element ref "${ref}". Call browser_snapshot again.`);
     return element;
+  }
+
+  // Locate the target file <input>, tag it with a unique attribute, and return a
+  // selector the background page can resolve via the debugger (DOM.setFileInputFiles).
+  // The real <input type=file> is usually visually hidden, so it is not in the snapshot
+  // ref map — default to the first file input on the page.
+  function markFileInput(ref, selector) {
+    let element = null;
+    if (ref) {
+      element = refs.get(ref) || null;
+    } else if (typeof selector === "string" && selector.trim() !== "") {
+      element = document.querySelector(selector);
+    } else {
+      element = document.querySelector('input[type="file"]');
+    }
+
+    // If the resolved element is a wrapper (e.g. a dropzone), dig out its file input.
+    if (element && !(element instanceof HTMLInputElement && element.type === "file")) {
+      const nested = element.querySelector ? element.querySelector('input[type="file"]') : null;
+      if (nested) element = nested;
+    }
+
+    if (!(element instanceof HTMLInputElement) || element.type !== "file") {
+      throw new Error("No file <input> found to upload into. Pass a selector or ref that resolves to one.");
+    }
+
+    const token = `t${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+    element.setAttribute("data-relay-file-target", token);
+    return { selector: `[data-relay-file-target="${token}"]`, multiple: element.multiple === true };
+  }
+
+  function unmarkFileInput(selector) {
+    if (typeof selector === "string") {
+      const element = document.querySelector(selector);
+      if (element) element.removeAttribute("data-relay-file-target");
+    }
+    return { unmarked: true };
   }
 
   function scrollToElement(element) {
