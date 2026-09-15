@@ -30,7 +30,7 @@ Add this entry to your MCP client's server configuration. Merge it with existing
   "mcpServers": {
     "aionda-browser": {
       "command": "npx",
-      "args": ["-y", "aionda-browser-mcp@0.1.0"]
+      "args": ["-y", "aionda-browser-mcp@0.1.1"]
     }
   }
 }
@@ -38,14 +38,14 @@ Add this entry to your MCP client's server configuration. Merge it with existing
 
 Restart the MCP client. It downloads the npm package and starts the server automatically. The first launch requires an internet connection. Do not also start a separate relay on the same port.
 
-On Windows, clients that cannot launch `npx` directly can use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "aionda-browser-mcp@0.1.0"]`.
+On Windows, clients that cannot launch `npx` directly can use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "aionda-browser-mcp@0.1.1"]`.
 
 #### Global installation
 
 If you prefer to install the server explicitly:
 
 ```sh
-npm install --global aionda-browser-mcp@0.1.0
+npm install --global aionda-browser-mcp@0.1.1
 ```
 
 Then configure your MCP client with `"command": "aionda-browser-mcp"` and `"args": []`. If your desktop client cannot find the command, use its absolute path (`command -v aionda-browser-mcp` on macOS/Linux or `where aionda-browser-mcp` on Windows).
@@ -73,7 +73,7 @@ Set the same values in the extension and in the MCP server's environment:
   "mcpServers": {
     "aionda-browser": {
       "command": "npx",
-      "args": ["-y", "aionda-browser-mcp@0.1.0"],
+      "args": ["-y", "aionda-browser-mcp@0.1.1"],
       "env": {
         "AIONDA_BROWSER_PORT": "18792",
         "AIONDA_BROWSER_TOKEN": "REPLACE_WITH_YOUR_OWN_RANDOM_TOKEN"

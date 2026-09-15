@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Aionda Browser MCP",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Connect your AI assistant to Chrome for browser automation through a local MCP server. Requires Node.js and setup.",
   "action": {
     "default_title": "Attach tab to Aionda Browser MCP",
@@ -33,8 +33,7 @@
     "debugger"
   ],
   "host_permissions": [
-    "http://*/*",
-    "https://*/*"
+    "<all_urls>"
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*;"

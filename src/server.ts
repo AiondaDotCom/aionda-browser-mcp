@@ -47,7 +47,7 @@ let connectedAt: string | null = null;
 
 const browserServer = new McpServer({
   name: "aionda-browser-mcp",
-  version: "0.1.0",
+  version: "0.1.1",
 });
 
 browserServer.tool("browser_status", "Return relay and attached-tab status.", {}, async () => {

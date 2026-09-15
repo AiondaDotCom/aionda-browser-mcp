@@ -9,7 +9,7 @@
 - Homepage: https://github.com/AiondaDotCom/aionda-browser-mcp
 - Support: https://github.com/AiondaDotCom/aionda-browser-mcp/issues
 - Privacy policy: https://aiondadotcom.github.io/aionda-browser-mcp/privacy.html
-- ZIP: `release/aionda-browser-mcp-0.1.0-chrome.zip`
+- ZIP: `release/aionda-browser-mcp-0.1.1-chrome.zip`
 
 ### Summary
 
@@ -34,7 +34,7 @@ This extension is a companion to the free aionda-browser-mcp npm package. It is 
 
 1. Install the extension and open its Options page.
 2. Install Node.js from https://nodejs.org/.
-3. Add the server to your MCP client using command "npx" and arguments ["-y", "aionda-browser-mcp@0.1.0"]. The client downloads and starts the server automatically. Alternatively, install it with: npm install -g aionda-browser-mcp@0.1.0
+3. Add the server to your MCP client using command "npx" and arguments ["-y", "aionda-browser-mcp@0.1.1"]. The client downloads and starts the server automatically. Alternatively, install it with: npm install -g aionda-browser-mcp@0.1.1
 4. Restart your MCP client. In the extension's Options, read the disclosure, check "Enable browser access" and save.
 5. Open a website. The extension badge shows "on" when connected. Ask your assistant to check browser_status.
 
@@ -62,7 +62,7 @@ Connect the user's selected Chrome tab to their local MCP client for user-direct
 - **webNavigation:** Discover frames in the selected tab so bundled content-script commands can reach a matching frame.
 - **alarms:** Reconnect to the user's local relay after service-worker suspension or a client restart.
 - **debugger:** Use Input.dispatchMouseEvent for coordinate clicks, DOM.setFileInputFiles for user-requested file inputs, and Runtime.evaluate in an isolated world for JavaScript expressions requested by the MCP client. No remote debugging port is needed. The debugger is detached in a finally block after each operation.
-- **HTTP/HTTPS host access:** The user can choose any normal website for automation. Permissions allow bundled script injection and screenshot capture across those websites; access remains disabled until explicitly enabled in Options.
+- **Host access (`<all_urls>`):** The user can choose any normal website for automation. Permissions allow bundled script injection and screenshot capture across those websites; access remains disabled until explicitly enabled in Options. Chrome requires `<all_urls>` for screenshot capture without a separate toolbar click on each tab; the extension only attaches HTTP/HTTPS pages.
 
 ## Remote code declaration
 
@@ -79,8 +79,8 @@ The privacy policy explains local storage, in-memory relay processing, user cont
 ## Reviewer instructions
 
 1. Install Node.js 22 or newer and the submitted extension. No Aionda account or paid service is required.
-2. Install the server using `npm install -g aionda-browser-mcp@0.1.0` or configure an MCP client with command `npx` and arguments `["-y", "aionda-browser-mcp@0.1.0"]`.
-3. Start the MCP client. Alternatively, launch `npx -y aionda-browser-mcp@0.1.0` in a terminal to verify relay connectivity only. Do not run two servers on the same port.
+2. Install the server using `npm install -g aionda-browser-mcp@0.1.1` or configure an MCP client with command `npx` and arguments `["-y", "aionda-browser-mcp@0.1.1"]`.
+3. Start the MCP client. Alternatively, launch `npx -y aionda-browser-mcp@0.1.1` in a terminal to verify relay connectivity only. Do not run two servers on the same port.
 4. Open the extension's Options. Keep localhost, port 18792 and the initial development token aionda-browser-dev. Read the disclosure, enable browser access and save.
 5. Open https://example.com/. The badge becomes on. Through an MCP client, call browser_status, browser_snapshot_compact and browser_screenshot_fast. The screenshot and text should match Example Domain.
 6. Test browser_evaluate with code `document.title`. It uses Chrome's Debugger API and returns the page title. Chrome may display a debugging banner.
