@@ -49,7 +49,7 @@ final class Renderer: NSObject, WKNavigationDelegate {
         let bootstrap = "window.chrome = {storage:{local:{get:async defaults => defaults}}};"
         configuration.userContentController.addUserScript(WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         view = WKWebView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800), configuration: configuration)
-        view.pageZoom = 0.95
+        view.pageZoom = 0.84
         super.init()
         view.navigationDelegate = self
     }
