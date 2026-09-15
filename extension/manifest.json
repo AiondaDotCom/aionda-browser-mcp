@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Aionda Browser MCP",
   "version": "0.1.0",
-  "description": "Attach a Chrome tab to a local MCP browser automation relay.",
+  "description": "Connect your AI assistant to Chrome for browser automation through a local MCP server. Requires Node.js and setup.",
   "action": {
     "default_title": "Attach tab to Aionda Browser MCP",
     "default_icon": {
@@ -23,9 +23,22 @@
     "type": "module"
   },
   "options_page": "options.html",
-  "permissions": ["activeTab", "scripting", "tabs", "storage", "webNavigation", "alarms", "debugger"],
-  "host_permissions": ["<all_urls>", "http://127.0.0.1/*", "http://localhost/*"],
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs",
+    "storage",
+    "webNavigation",
+    "alarms",
+    "debugger"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*;"
-  }
+  },
+  "minimum_chrome_version": "120",
+  "homepage_url": "https://github.com/AiondaDotCom/aionda-browser-mcp"
 }

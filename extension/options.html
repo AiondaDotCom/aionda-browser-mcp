@@ -1,65 +1,74 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>Aionda Browser MCP Options</title>
-    <style>
-      body {
-        color: #202124;
-        font: 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        margin: 32px;
-        max-width: 680px;
-      }
-
-      label {
-        display: block;
-        font-weight: 600;
-        margin: 18px 0 6px;
-      }
-
-      input {
-        border: 1px solid #dadce0;
-        border-radius: 6px;
-        box-sizing: border-box;
-        font: inherit;
-        padding: 10px 12px;
-        width: 100%;
-      }
-
-      button {
-        background: #1a73e8;
-        border: 0;
-        border-radius: 6px;
-        color: white;
-        cursor: pointer;
-        font: inherit;
-        font-weight: 600;
-        margin-top: 18px;
-        padding: 10px 16px;
-      }
-
-      #status {
-        color: #137333;
-        margin-left: 12px;
-      }
-    </style>
-  </head>
-  <body>
-    <h1>Aionda Browser MCP</h1>
-    <p>Configure the local relay endpoint used by the extension.</p>
-
-    <label for="host">Host</label>
-    <input id="host" autocomplete="off">
-
-    <label for="port">Port</label>
-    <input id="port" inputmode="numeric" autocomplete="off">
-
-    <label for="token">Gateway token</label>
-    <input id="token" autocomplete="off">
-
-    <button id="save">Save</button>
-    <span id="status"></span>
-
-    <script src="options.js"></script>
-  </body>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aionda Browser MCP — Setup</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f7fb; color: #17243b; font: 15px/1.55 system-ui, sans-serif; }
+    main { max-width: 1000px; margin: 40px auto; padding: 0 28px; }
+    header { display: flex; align-items: center; gap: 18px; margin-bottom: 24px; }
+    header img { width: 56px; height: 56px; }
+    h1 { font-size: 29px; margin: 0; letter-spacing: -1px; }
+    header p { margin: 2px 0 0; color: #53647e; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    section { background: white; border: 1px solid #dce4ef; border-radius: 16px; padding: 24px; }
+    h2 { font-size: 19px; margin: 0 0 14px; }
+    p { margin: 10px 0; }
+    code, pre { font: 13px/1.6 ui-monospace, monospace; }
+    pre { padding: 15px; background: #17243b; color: #e7f1ff; border-radius: 9px; overflow-x: auto; }
+    a { color: #165fc5; }
+    label { display: block; font-weight: 600; margin: 12px 0 5px; }
+    input:not([type=checkbox]) { width: 100%; padding: 10px; border: 1px solid #bac8dc; border-radius: 7px; font: inherit; }
+    .row { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
+    .consent { background: #edf4ff; padding: 14px; border-radius: 9px; margin-top: 18px; font-size: 13px; }
+    .consent label { margin: 0 0 6px; font-size: 15px; }
+    .consent input { margin-right: 6px; }
+    button { background: #165fc5; color: white; border: 0; border-radius: 8px; padding: 12px 20px; margin-top: 16px; font: 600 15px system-ui; cursor: pointer; }
+    #status { display: block; margin-top: 8px; font-size: 13px; }
+    footer { color: #53647e; font-size: 13px; margin: 18px 0; }
+    @media(max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header><img src="icons/icon-128.png" alt=""><div><h1>Aionda Browser MCP</h1><p>Connect your AI assistant to your browser.</p></div></header>
+  <div class="grid">
+    <section>
+      <h2>1. Set up your MCP client</h2>
+      <p>Install <a href="https://nodejs.org/" target="_blank" rel="noreferrer">Node.js 22 or newer</a> on the computer running Chrome. Add this server to your MCP client's configuration:</p>
+      <pre>{
+  "mcpServers": {
+    "aionda-browser": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "aionda-browser-mcp@0.1.0"
+      ]
+    }
+  }
+}</pre>
+      <p>Restart your MCP client. It starts the local server automatically.</p>
+      <p>Alternatively, install the command globally:</p>
+      <pre>npm install -g aionda-browser-mcp</pre>
+      <p><a href="https://github.com/AiondaDotCom/aionda-browser-mcp#installation" target="_blank" rel="noreferrer">Full installation guide and troubleshooting →</a></p>
+    </section>
+    <section>
+      <h2>2. Enable the browser connection</h2>
+      <div class="row"><div><label for="host">Local host</label><input id="host" autocomplete="off" value="127.0.0.1"></div><div><label for="port">Port</label><input id="port" type="number" min="1" max="65535" value="18792"></div></div>
+      <label for="token">Relay token</label><input id="token" type="password" autocomplete="off" value="aionda-browser-dev">
+      <p>The host, port and token must match your MCP server. Only localhost connections are supported.</p>
+      <div class="consent">
+        <label><input id="enabled" type="checkbox">Enable browser access</label>
+        Your MCP client can read page content and tab URLs, take screenshots, interact with pages, run JavaScript and upload local files on your behalf. While enabled, the connection follows your active tab. Page data is sent to your local MCP client, which may share it with its AI provider. Enable this only for clients and pages you trust.
+      </div>
+      <button id="save">Save settings</button><span id="status" role="status" aria-live="polite"></span>
+      <p>Open a normal website. The toolbar badge shows <strong>on</strong> when connected. Ask your assistant to check <code>browser_status</code>.</p>
+    </section>
+  </div>
+  <footer>To stop access, clear “Enable browser access” and save, or disable the extension. No Aionda account, analytics or cloud relay. <a href="https://aiondadotcom.github.io/aionda-browser-mcp/privacy.html" target="_blank" rel="noreferrer">Privacy policy</a> · <a href="https://github.com/AiondaDotCom/aionda-browser-mcp/issues" target="_blank" rel="noreferrer">Support</a></footer>
+</main>
+<script src="options.js"></script>
+</body>
 </html>

@@ -2,6 +2,7 @@ const DEFAULTS = {
   host: "127.0.0.1",
   port: 18792,
   token: "aionda-browser-dev",
+  enabled: false,
 };
 
 let socket = null;
@@ -13,12 +14,13 @@ let lastSettings = { ...DEFAULTS };
 
 const RECONNECT_ALARM = "aionda-browser-mcp-reconnect";
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   const stored = await chrome.storage.local.get(DEFAULTS);
   await chrome.storage.local.set({ ...DEFAULTS, ...stored });
   setBadge("off", "#777777");
   startReconnectAlarm();
   connect();
+  if (reason === "install" || !stored.enabled) chrome.runtime.openOptionsPage();
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -27,10 +29,12 @@ chrome.runtime.onStartup.addListener(() => {
 });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.host || changes.port || changes.token) reconnect();
+  if (changes.host || changes.port || changes.token || changes.enabled) reconnect();
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
+  const { enabled } = await chrome.storage.local.get(DEFAULTS);
+  if (!enabled) return chrome.runtime.openOptionsPage();
   if (!isSocketOpen()) connect();
   await attachTab(tab);
 });
@@ -75,7 +79,7 @@ connect();
 startReconnectAlarm();
 
 function startReconnectAlarm() {
-  chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.25 });
+  chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 });
 }
 
 function isSocketOpen() {
@@ -85,6 +89,10 @@ function isSocketOpen() {
 async function connect() {
   clearTimeout(reconnectTimer);
   lastSettings = await chrome.storage.local.get(DEFAULTS);
+  if (!lastSettings.enabled) {
+    setBadge("off", "#777777");
+    return;
+  }
   const url = `ws://${lastSettings.host}:${lastSettings.port}/relay?token=${encodeURIComponent(lastSettings.token)}`;
   const generation = ++socketGeneration;
 
@@ -128,7 +136,11 @@ async function connect() {
 }
 
 function reconnect() {
+  ++socketGeneration;
   if (socket) socket.close();
+  socket = null;
+  attachedTabId = null;
+  attachedTab = {};
   connect();
 }
 
@@ -171,6 +183,7 @@ async function listVisibleTabs() {
 }
 
 async function attachTab(tab) {
+  if (!lastSettings.enabled || !isSocketOpen()) return;
   if (!tab.id) return;
 
   if (!isScriptableUrl(tab.url)) {
@@ -187,9 +200,11 @@ async function attachTab(tab) {
     await ensureContentScript(tab.id);
     setBadge("on", "#137333");
   } catch (error) {
-    attachedTabId = null;
-    attachedTab = tabToState(tab, false, error instanceof Error ? error.message : String(error));
-    setBadge("no", "#d93025");
+    // Some Chrome-managed HTTPS pages block content scripts. Retain the tab
+    // for screenshots; Chrome still enforces restrictions on each other API.
+    attachedTabId = tab.id;
+    attachedTab = tabToState(tab, true, error instanceof Error ? error.message : String(error));
+    setBadge("on", "#137333");
   }
 
   sendState();
@@ -211,6 +226,7 @@ async function handleCommand(raw) {
 
 async function runCommand(command, payload) {
   try {
+    if (!lastSettings.enabled) throw new Error("Browser access is disabled in the extension settings.");
     if (command === "reloadExtension") {
       setTimeout(() => chrome.runtime.reload(), 100);
       return ok({ reloading: true });
@@ -261,12 +277,42 @@ async function runCommand(command, payload) {
       return ok(await uploadFiles(attachedTabId, payload));
     }
 
+    if (command === "evaluate") {
+      return ok(await evaluateInTab(attachedTabId, payload.code));
+    }
+
     await ensureContentScript(attachedTabId);
     const result = await sendCommandToAttachedFrames(attachedTabId, command, payload);
     if (result && result.ok === false) return result;
     return ok(result ?? null);
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+// The Debugger API is the documented MV3 API for user-directed code execution.
+// Keep expressions in an isolated page world without extension API access.
+async function evaluateInTab(tabId, code) {
+  if (typeof code !== "string" || !code.trim()) throw new Error("code is required.");
+  const target = { tabId };
+  await chrome.debugger.attach(target, "1.3");
+  try {
+    const { frameTree } = await chrome.debugger.sendCommand(target, "Page.getFrameTree");
+    const { executionContextId } = await chrome.debugger.sendCommand(target, "Page.createIsolatedWorld", {
+      frameId: frameTree.frame.id,
+      worldName: "aionda-browser-mcp-evaluate",
+    });
+    const { result, exceptionDetails } = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
+      expression: `(${code}\n)`,
+      contextId: executionContextId,
+      returnByValue: true,
+      awaitPromise: true,
+      timeout: 8000,
+    });
+    if (exceptionDetails) throw new Error(exceptionDetails.exception?.description || exceptionDetails.text);
+    return result?.value ?? null;
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
   }
 }
 

@@ -37,8 +37,6 @@
         return typeInto(payload.ref, payload.text ?? "", payload.clear === true, payload.submit === true);
       case "pressKey":
         return pressKey(payload.key);
-      case "evaluate":
-        return evaluate(payload.code);
       case "scroll":
         return scrollPage(payload.direction, payload.amount);
       case "scrollIntoView":
@@ -232,12 +230,6 @@
     }
 
     return { pressed: key };
-  }
-
-  function evaluate(code) {
-    if (typeof code !== "string" || code.trim() === "") throw new Error("code is required.");
-    const result = Function(`"use strict"; return (${code});`)();
-    return toJsonSafe(result);
   }
 
   function scrollPage(direction, amount) {
@@ -457,8 +449,4 @@
     return 0;
   }
 
-  function toJsonSafe(value) {
-    if (value === undefined) return null;
-    return JSON.parse(JSON.stringify(value));
-  }
 })();

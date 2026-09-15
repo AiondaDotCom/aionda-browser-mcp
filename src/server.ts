@@ -164,7 +164,7 @@ browserServer.tool(
 
 browserServer.tool(
   "browser_evaluate",
-  "Run JavaScript in the attached tab content-script context. Use only for trusted pages.",
+  "Evaluate a JavaScript expression in an isolated page world via Chrome's Debugger API. Use only for trusted pages. Returns JSON-serializable results.",
   { code: z.string() },
   async ({ code }) => textResult(await sendCommand("evaluate", { code }))
 );
@@ -213,7 +213,7 @@ function startRelayServer({ host, port, token }: ServerOptions): Promise<void> {
       if (isAddressInUseError(error)) {
         console.error(
           `aionda-browser-mcp cannot start: 127.0.0.1:${options.port} is already in use. ` +
-            "Stop the existing server first (pkill -f 'aionda-browser-mcp/dist/server.js') and restart the MCP client."
+            "Stop the other MCP client using this relay, or configure a different port in both the server and extension."
         );
       } else {
         console.error("aionda-browser-mcp relay error:", error);

@@ -1,7 +1,7 @@
 {
   "name": "aionda-browser-mcp",
   "version": "0.1.0",
-  "description": "Chrome extension relay plus MCP server for browser automation without Chrome DevTools.",
+  "description": "Connect MCP-compatible AI assistants to Chrome through a local browser automation relay.",
   "type": "module",
   "homepage": "https://github.com/AiondaDotCom/aionda-browser-mcp#readme",
   "repository": {
@@ -18,13 +18,16 @@
     "dist",
     "extension",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "PRIVACY.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "dev": "tsx src/server.ts",
-    "check": "tsc -p tsconfig.json --noEmit"
+    "check": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run check && npm run build",
+    "package:extension": "python3 scripts/package-extension.py"
   },
   "keywords": [
     "mcp",
@@ -45,5 +48,11 @@
     "@types/ws": "^8.5.13",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
