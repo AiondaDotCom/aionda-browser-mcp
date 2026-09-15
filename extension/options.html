@@ -30,10 +30,15 @@
     .copy-button { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 32px; height: 32px; margin: 0; padding: 7px; background: #243550; color: #c4d3e8; border: 1px solid #41516a; border-radius: 6px; }
     .copy-button:hover { background: #344969; color: white; }
     .copy-button:focus-visible { outline: 2px solid #88bcff; outline-offset: 2px; }
-    .copy-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-    .copy-button .check-icon, .copy-button[data-copied] .copy-icon { display: none; }
-    .copy-button[data-copied] .check-icon { display: block; }
+    .icon-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .icon-button .check-icon, .icon-button[data-copied] .copy-icon { display: none; }
+    .icon-button[data-copied] .check-icon { display: block; }
     .copy-button[data-copied] { color: #79dfba; }
+    .token-icon-button { display: grid; place-items: center; width: 40px; flex: 0 0 40px; }
+    .token-controls button[data-copied] { color: #137333; }
+    .token-icon-button:focus-visible { outline: 2px solid #165fc5; outline-offset: 2px; }
+    #toggle-token .eye-off-icon, #toggle-token[aria-pressed="true"] .eye-icon { display: none; }
+    #toggle-token[aria-pressed="true"] .eye-off-icon { display: block; }
     .consent { background: #edf4ff; padding: 14px; border-radius: 9px; margin-top: 18px; font-size: 13px; }
     .consent label { margin: 0 0 6px; font-size: 15px; }
     .consent input { margin-right: 6px; }
@@ -56,12 +61,12 @@
       "command": "npx",
       "args": [
         "-y",
-        "aionda-browser-mcp@0.1.3"
+        "aionda-browser-mcp@0.1.4"
       ]
     }
   }
 }</pre>
-      <button class="copy-button" type="button" data-copy-target="mcp-config" aria-label="Copy configuration" title="Copy configuration">
+      <button class="copy-button icon-button" type="button" data-copy-target="mcp-config" aria-label="Copy configuration" title="Copy configuration">
         <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path></svg>
         <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>
       </button></div>
@@ -69,7 +74,7 @@
       <p>Restart your MCP client. It starts the local server automatically.</p>
       <p>Alternatively, install the command globally:</p>
       <div class="code-block"><pre id="install-command">npm install -g aionda-browser-mcp</pre>
-      <button class="copy-button" type="button" data-copy-target="install-command" aria-label="Copy command" title="Copy command">
+      <button class="copy-button icon-button" type="button" data-copy-target="install-command" aria-label="Copy command" title="Copy command">
         <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path></svg>
         <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>
       </button></div>
@@ -81,8 +86,14 @@
       <label for="token">Relay token</label>
       <div class="token-controls">
         <input id="token" type="password" autocomplete="off" spellcheck="false" aria-describedby="token-help" value="aionda-browser-dev">
-        <button id="toggle-token" type="button" aria-controls="token" aria-label="Show relay token" aria-pressed="false">Show</button>
-        <button id="copy-token" type="button" aria-label="Copy relay token">Copy</button>
+        <button id="toggle-token" class="token-icon-button icon-button" type="button" aria-controls="token" aria-label="Show relay token" aria-pressed="false" title="Show relay token">
+          <svg class="eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+          <svg class="eye-off-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18M10.5 5.1 12 5c6.5 0 10 7 10 7a18 18 0 0 1-3 3.8M6.2 6.2A22 22 0 0 0 2 12s3.5 7 10 7a11 11 0 0 0 5-1.3M10 10a3 3 0 0 0 4 4"></path></svg>
+        </button>
+        <button id="copy-token" class="token-icon-button icon-button" type="button" aria-label="Copy relay token" title="Copy relay token">
+          <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path></svg>
+          <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>
+        </button>
       </div>
       <p id="token-help">Set <code>AIONDA_BROWSER_TOKEN</code> in your MCP server's environment to this token. After changing it here, save settings and restart the MCP client with the same token.</p>
       <p>The host, port and token must match your MCP server. Only localhost connections are supported.</p>

@@ -30,7 +30,7 @@ Use the copy icon inside the configuration block on the extension's Options page
   "mcpServers": {
     "aionda-browser": {
       "command": "npx",
-      "args": ["-y", "aionda-browser-mcp@0.1.3"]
+      "args": ["-y", "aionda-browser-mcp@0.1.4"]
     }
   }
 }
@@ -38,14 +38,14 @@ Use the copy icon inside the configuration block on the extension's Options page
 
 Restart the MCP client. It downloads the npm package and starts the server automatically. The first launch requires an internet connection. Do not also start a separate relay on the same port.
 
-On Windows, clients that cannot launch `npx` directly can use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "aionda-browser-mcp@0.1.3"]`.
+On Windows, clients that cannot launch `npx` directly can use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "aionda-browser-mcp@0.1.4"]`.
 
 #### Global installation
 
 If you prefer to install the server explicitly, use **Copy command** on the Options page or run:
 
 ```sh
-npm install --global aionda-browser-mcp@0.1.3
+npm install --global aionda-browser-mcp@0.1.4
 ```
 
 Then configure your MCP client with `"command": "aionda-browser-mcp"` and `"args": []`. If your desktop client cannot find the command, use its absolute path (`command -v aionda-browser-mcp` on macOS/Linux or `where aionda-browser-mcp` on Windows).
@@ -66,14 +66,14 @@ While enabled, the extension follows the active tab. An MCP client can also sele
 
 ### Custom token or port
 
-Use **Show / Hide** beside the relay token to reveal or conceal it, and **Copy** to copy its value. Set the same values in the extension and in the MCP server's environment:
+Use the **eye icon** beside the relay token to reveal or conceal it, and the **copy icon** to copy its value. A checkmark briefly confirms a successful copy. Set the same values in the extension and in the MCP server's environment:
 
 ```json
 {
   "mcpServers": {
     "aionda-browser": {
       "command": "npx",
-      "args": ["-y", "aionda-browser-mcp@0.1.3"],
+      "args": ["-y", "aionda-browser-mcp@0.1.4"],
       "env": {
         "AIONDA_BROWSER_PORT": "18792",
         "AIONDA_BROWSER_TOKEN": "REPLACE_WITH_YOUR_OWN_RANDOM_TOKEN"
