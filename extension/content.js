@@ -242,6 +242,23 @@
 
   function scrollPage(direction, amount) {
     const dir = typeof direction === "string" ? direction.toLowerCase() : "down";
+    const dialog = Array.from(document.querySelectorAll('[role="dialog"], dialog[open]')).filter(isVisible).at(-1);
+    const dialogScroller = dialog && [dialog, ...dialog.querySelectorAll("*")]
+      .filter((element) => isVisible(element)
+        && /^(auto|scroll)$/.test(getComputedStyle(element).overflowY)
+        && element.scrollHeight > element.clientHeight)
+      .sort((left, right) => (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight))[0];
+    if (dialogScroller) {
+      const maximum = dialogScroller.scrollHeight - dialogScroller.clientHeight;
+      const step = typeof amount === "number" && Number.isFinite(amount) && amount > 0
+        ? Math.round(amount) : Math.max(1, dialogScroller.clientHeight - 100);
+      const top = dir === "top" ? 0 : dir === "bottom" ? maximum
+        : dialogScroller.scrollTop + (dir === "up" ? -step : step);
+      dialogScroller.scrollTo({ top, behavior: "instant" });
+      return { direction: dir, target: "dialog", scrollY: dialogScroller.scrollTop,
+        innerHeight: dialogScroller.clientHeight, scrollHeight: dialogScroller.scrollHeight,
+        atTop: dialogScroller.scrollTop <= 0, atBottom: dialogScroller.scrollTop >= maximum - 1 };
+    }
     const scroller = document.scrollingElement || document.documentElement || document.body;
     const maxScroll = Math.max(0, (scroller?.scrollHeight ?? 0) - innerHeight);
     const viewportStep = Math.max(1, innerHeight - 100);
