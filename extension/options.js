@@ -1,6 +1,7 @@
-const DEFAULTS = { host: "127.0.0.1", port: 18792, token: "aionda-browser-dev", enabled: false };
+const DEFAULTS = { host: "127.0.0.1", port: 18792, portCount: 128, token: "aionda-browser-dev", enabled: false };
 const host = document.getElementById("host");
 const port = document.getElementById("port");
+const portCount = document.getElementById("port-count");
 const token = document.getElementById("token");
 const enabled = document.getElementById("enabled");
 const status = document.getElementById("status");
@@ -15,6 +16,7 @@ for (const button of document.querySelectorAll("[data-copy-target]")) {
         configuration.mcpServers["aionda-browser"].env = {
           AIONDA_BROWSER_HOST: settings.host,
           AIONDA_BROWSER_PORT: String(settings.port),
+          AIONDA_BROWSER_PORT_COUNT: String(settings.portCount),
           AIONDA_BROWSER_TOKEN: settings.token,
         };
         text = JSON.stringify(configuration, null, 2);
@@ -22,7 +24,7 @@ for (const button of document.querySelectorAll("[data-copy-target]")) {
       await navigator.clipboard.writeText(text.trim());
       markCopied(button);
       status.style.color = "#137333";
-      status.textContent = button.dataset.copyTarget === "mcp-config" ? "Configuration copied with the current host, port and token. Save any changed settings here too." : "Command copied.";
+      status.textContent = button.dataset.copyTarget === "mcp-config" ? "Configuration copied with the current host, ports and token. Save any changed settings here too." : "Command copied.";
     } catch {
       showError(new Error("Could not copy. Select the configuration or command and copy it manually."));
     }
@@ -53,16 +55,19 @@ async function load() {
   const settings = await chrome.storage.local.get(DEFAULTS);
   host.value = settings.host;
   port.value = settings.port;
+  portCount.value = settings.portCount;
   token.value = settings.token;
   enabled.checked = settings.enabled === true;
 }
 function readSettings() {
   const localHost = host.value.trim() || DEFAULTS.host;
   const localPort = Number(port.value);
+  const localPortCount = Number(portCount.value);
   if (!["127.0.0.1", "localhost"].includes(localHost)) throw new Error("Use 127.0.0.1 or localhost.");
   if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) throw new Error("Enter a port from 1 to 65535.");
+  if (!Number.isInteger(localPortCount) || localPortCount < 1 || localPortCount > 1024) throw new Error("Enter 1 to 1024 ports.");
   if (!token.value.trim()) throw new Error("Enter the same token as your MCP server.");
-  return { host: localHost, port: localPort, token: token.value, enabled: enabled.checked };
+  return { host: localHost, port: localPort, portCount: localPortCount, token: token.value, enabled: enabled.checked };
 }
 async function persist() {
   await chrome.storage.local.set(readSettings());

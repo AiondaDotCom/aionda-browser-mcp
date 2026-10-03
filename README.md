@@ -36,7 +36,7 @@ Use the copy icon inside the configuration block on the extension's Options page
 }
 ```
 
-Restart the MCP client. It downloads the npm package and starts the server automatically. The first launch requires an internet connection. Do not also start a separate relay on the same port.
+Restart the MCP client. It downloads the npm package and starts the server automatically. The first launch requires an internet connection.
 
 On Windows, clients that cannot launch `npx` directly can use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "aionda-browser-mcp@0.1.4"]`.
 
@@ -56,17 +56,30 @@ The server uses stdio. Running `aionda-browser-mcp` in a terminal starts a relay
 
 In the extension's **Options** page:
 
-1. Leave host `127.0.0.1`, port `18792` and token `aionda-browser-dev` for the initial local setup.
+1. Leave host `127.0.0.1`, first port `18792`, `128` ports and token `aionda-browser-dev` for the initial local setup.
 2. Read the browser-access disclosure.
 3. Check **Enable browser access** and click **Save settings**.
 4. Open a normal HTTP or HTTPS website. The badge shows **on** when a tab is attached to the running relay.
 5. Ask your assistant to call `browser_status`, then `browser_snapshot_compact`.
 
-While enabled, the extension follows the active tab. An MCP client can also select a tab by URL using `browser_attach`. Only one tab is attached at a time. To stop access, uncheck **Enable browser access** and save, or disable the extension.
+While enabled, the extension follows the active tab. An MCP client can also select a tab with `browser_attach` or open its own with `browser_open_tab`. To stop access, uncheck **Enable browser access** and save, or disable the extension.
+
+### Several AI agents at once
+
+Every MCP client starts its own server, and each server takes the first free port of a pool: by default the 128 ports `18792`–`18919`. The extension connects to every server in the pool, so several agents (for example Claude Code and Codex, or parallel sessions) can use the same Chrome at the same time.
+
+- Each agent has its own attached tab. A new agent follows the active tab.
+- `browser_attach` (by `tabId` or `urlContains`) and `browser_open_tab` give the agent its own tab, which it keeps when you or another agent switch tabs. `browser_attach` with `followActive: true` returns to following the active tab.
+- `browser_list_tabs` shows which tab the calling agent is attached to (`attachedHere`) and how many other agents use each tab (`otherAgents`).
+- Screenshots and coordinate clicks bring their tab to the front. The extension runs these, as well as JavaScript evaluation and file uploads, one at a time. For parallel visual work, give each agent its own window: `browser_open_tab` with `newWindow: true`.
+- Agents sharing one tab also share its element refs: a snapshot by one agent invalidates the refs of the other.
+- The badge shows `on` for one connected agent and the number of agents when several are connected.
+
+The extension checks the ports just above the highest connected one every 2 seconds and the whole pool every 20 seconds. A server exits when its MCP client closes stdin or exits, so it does not keep a pool port occupied.
 
 ### Custom token or port
 
-Use the **eye icon** beside the relay token to reveal or conceal it, and the **copy icon** to copy its value. A checkmark briefly confirms a successful copy. Set the same values in the extension and in the MCP server's environment:
+Use the **eye icon** beside the relay token to reveal or conceal it, and the **copy icon** to copy its value. A checkmark briefly confirms a successful copy. Set the same values in the extension and in the MCP server's environment. A custom port is the first port of the pool:
 
 ```json
 {
@@ -76,6 +89,7 @@ Use the **eye icon** beside the relay token to reveal or conceal it, and the **c
       "args": ["-y", "aionda-browser-mcp@0.1.4"],
       "env": {
         "AIONDA_BROWSER_PORT": "18792",
+        "AIONDA_BROWSER_PORT_COUNT": "128",
         "AIONDA_BROWSER_TOKEN": "REPLACE_WITH_YOUR_OWN_RANDOM_TOKEN"
       }
     }
@@ -88,18 +102,19 @@ Use your own random token on shared machines. Keep the relay on localhost. The d
 | Setting | Environment variable | Default |
 | --- | --- | --- |
 | Host | `AIONDA_BROWSER_HOST` | `127.0.0.1` |
-| Port | `AIONDA_BROWSER_PORT` | `18792` |
+| First port of the pool | `AIONDA_BROWSER_PORT` | `18792` |
+| Number of pool ports (1–1024) | `AIONDA_BROWSER_PORT_COUNT` | `128` |
 | Token | `AIONDA_BROWSER_TOKEN` | `aionda-browser-dev` |
 | Command timeout | `AIONDA_BROWSER_TIMEOUT_MS` | `10000` |
 
-Equivalent CLI flags are `--host`, `--port`, `--token` and `--timeout-ms`.
+Equivalent CLI flags are `--host`, `--port`, `--port-count`, `--token` and `--timeout-ms`. The first port and the pool size must match the extension's settings.
 
 ## Tools
 
 | Tools | Purpose |
 | --- | --- |
 | `browser_status`, `browser_tab` | Check the connection and attached tab |
-| `browser_list_tabs`, `browser_attach` | Find and select a browser tab |
+| `browser_list_tabs`, `browser_attach`, `browser_open_tab` | Find, select or open a tab for this agent |
 | `browser_snapshot`, `browser_snapshot_compact` | Read page text and interactive element references |
 | `browser_click`, `browser_click_at` | Click an element or viewport coordinates |
 | `browser_type`, `browser_press_key` | Fill fields and send keys |
@@ -115,7 +130,8 @@ Prefer `browser_snapshot_compact` for smaller text results and `browser_screensh
 ## Troubleshooting
 
 - **Badge off / extension disconnected:** Start or restart your MCP client, enable browser access, and check that the host, port and token match. Check Chrome's site-access setting for the extension.
-- **Port already in use:** Another MCP client or relay is already using port 18792. Stop that instance or choose a different port in both configurations. The server never stops another process automatically.
+- **All relay ports in use:** Every port of the pool is taken by a running MCP client. Close one, or raise the pool size in both the extension and the server. The server never stops another process automatically.
+- **Agents switch each other's tab:** Agents that follow the active tab move along when another agent brings its tab to the front. Use `browser_open_tab` or `browser_attach` to give each agent its own tab.
 - **No tab attached:** Open a normal website and click the toolbar icon. Chrome restricts internal pages, the Web Store and some managed pages.
 - **Node or npx not found:** Restart your desktop client after installing Node.js or use an absolute command path.
 - **Debugger action fails:** Chrome may show a debugging banner. Another debugger or an enterprise policy can prevent coordinate clicks, uploads and evaluation.

@@ -1,16 +1,27 @@
 const DEFAULTS = {
   host: "127.0.0.1",
   port: 18792,
+  portCount: 128,
   token: "aionda-browser-dev",
   enabled: false,
 };
+const MAX_PORT_COUNT = 1024;
+const SCAN_INTERVAL_MS = 2000;
+// Servers take the lowest free port, so a new agent appears just above the
+// highest open port or in a gap below it. Scan that window every tick and the
+// whole pool every FULL_SCAN_TICKS ticks.
+const SCAN_WINDOW = 8;
+const FULL_SCAN_TICKS = 10;
 
-let socket = null;
-let socketGeneration = 0;
-let reconnectTimer = null;
-let attachedTabId = null;
-let attachedTab = {};
+// One session per relay port. Each MCP server (one per AI agent) binds the
+// first free port of the pool, so every open socket is a separate agent with
+// its own attached tab.
+const sessions = new Map();
+let settingsGeneration = 0;
+let scanTimer = null;
+let scanTick = 0;
 let lastSettings = { ...DEFAULTS };
+let exclusiveQueue = Promise.resolve();
 
 const RECONNECT_ALARM = "aionda-browser-mcp-reconnect";
 
@@ -29,50 +40,61 @@ chrome.runtime.onStartup.addListener(() => {
 });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.host || changes.port || changes.token || changes.enabled) reconnect();
+  if (changes.host || changes.port || changes.portCount || changes.token || changes.enabled) reconnect();
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
   const { enabled } = await chrome.storage.local.get(DEFAULTS);
   if (!enabled) return chrome.runtime.openOptionsPage();
-  if (!isSocketOpen()) connect();
-  await attachTab(tab);
+  const open = openSessions();
+  if (open.length === 0) return connect();
+  // Agents that picked their own tab keep it, unless every agent did.
+  const following = open.filter((session) => !session.pinned);
+  await Promise.all((following.length ? following : open).map((session) => attachTab(session, tab)));
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === RECONNECT_ALARM && !isSocketOpen()) connect();
+  if (alarm.name === RECONNECT_ALARM) connect();
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (tab.active && changeInfo.status === "complete") {
-    attachTab(tab).catch(() => {});
-    return;
-  }
+  for (const session of openSessions()) {
+    if (!session.pinned && tab.active && changeInfo.status === "complete") {
+      attachTab(session, tab).catch(() => {});
+      continue;
+    }
 
-  if (tabId !== attachedTabId) return;
-  if (!isScriptableUrl(tab.url)) {
-    attachedTabId = null;
-    attachedTab = tabToState(tab, false, unsupportedUrlMessage(tab.url));
-    setBadge("no", "#d93025");
-    sendState();
-    return;
+    if (tabId !== session.attachedTabId) continue;
+    if (!isScriptableUrl(tab.url)) {
+      // A pinned agent keeps its tab so it can navigate back.
+      if (!session.pinned) session.attachedTabId = null;
+      session.attachedTab = tabToState(tab, false, unsupportedUrlMessage(tab.url));
+      sendState(session);
+      continue;
+    }
+    session.attachedTab = tabToState(tab, true);
+    sendState(session);
+    if (changeInfo.status === "complete") ensureContentScript(tabId).catch(() => {});
   }
-  attachedTab = tabToState(tab, true);
-  sendState();
-  if (changeInfo.status === "complete") ensureContentScript(tabId).catch(() => {});
+  updateBadge();
 });
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  const following = openSessions().filter((session) => !session.pinned);
+  if (following.length === 0) return;
   const tab = await chrome.tabs.get(tabId);
-  await attachTab(tab);
+  await Promise.all(following.map((session) => attachTab(session, tab)));
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabId !== attachedTabId) return;
-  attachedTabId = null;
-  attachedTab = {};
-  setBadge("off", "#777777");
-  sendState();
+  for (const session of sessions.values()) {
+    if (tabId !== session.attachedTabId) continue;
+    session.attachedTabId = null;
+    session.attachedTab = {};
+    session.pinned = false;
+    sendState(session);
+  }
+  updateBadge();
 });
 
 connect();
@@ -82,95 +104,120 @@ function startReconnectAlarm() {
   chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 });
 }
 
-function isSocketOpen() {
-  return socket?.readyState === WebSocket.OPEN;
+function isSocketOpen(session) {
+  return session?.socket?.readyState === WebSocket.OPEN;
 }
 
+function openSessions() {
+  return [...sessions.values()].filter(isSocketOpen);
+}
+
+function poolPorts(settings) {
+  const base = Number(settings.port);
+  const count = Math.min(MAX_PORT_COUNT, Math.max(1, Math.round(Number(settings.portCount) || 1)));
+  const ports = [];
+  for (let port = base; port < base + count && port <= 65535; port += 1) ports.push(port);
+  return ports;
+}
+
+// Opens sockets to pool ports without one and keeps scanning, so MCP servers
+// started later are picked up within SCAN_INTERVAL_MS.
 async function connect() {
-  clearTimeout(reconnectTimer);
-  lastSettings = await chrome.storage.local.get(DEFAULTS);
+  clearTimeout(scanTimer);
+  const generation = settingsGeneration;
+  const settings = await chrome.storage.local.get(DEFAULTS);
+  if (generation !== settingsGeneration) return;
+  lastSettings = settings;
   if (!lastSettings.enabled) {
-    setBadge("off", "#777777");
+    updateBadge();
     return;
   }
-  const url = `ws://${lastSettings.host}:${lastSettings.port}/relay?token=${encodeURIComponent(lastSettings.token)}`;
-  const generation = ++socketGeneration;
+  const ports = poolPorts(lastSettings);
+  const highestOpen = Math.max(ports[0] - 1, ...openSessions().map((session) => session.port));
+  const fullScan = scanTick++ % FULL_SCAN_TICKS === 0;
+  for (const port of ports) {
+    if (!fullScan && port > highestOpen + SCAN_WINDOW) break;
+    if (!sessions.has(port)) openSession(port, generation);
+  }
+  scanTimer = setTimeout(connect, SCAN_INTERVAL_MS);
+}
 
+function openSession(port, generation) {
+  const url = `ws://${lastSettings.host}:${port}/relay?token=${encodeURIComponent(lastSettings.token)}`;
+  let socket;
   try {
     socket = new WebSocket(url);
   } catch {
-    scheduleReconnect();
     return;
   }
 
+  const session = { port, socket, attachedTabId: null, attachedTab: {}, pinned: false };
+  sessions.set(port, session);
+  const isCurrent = () => sessions.get(port) === session && generation === settingsGeneration;
+
   socket.onopen = () => {
-    if (generation !== socketGeneration) return;
-    attachActiveTab().catch((error) => {
-      attachedTab = { attached: false, version: chrome.runtime.getManifest().version, error: error instanceof Error ? error.message : String(error) };
-      setBadge(attachedTabId ? "on" : "idle", attachedTabId ? "#137333" : "#fbbc04");
-      sendState();
+    if (!isCurrent()) return;
+    updateBadge();
+    attachActiveTab(session).catch((error) => {
+      session.attachedTab = { attached: false, version: chrome.runtime.getManifest().version, error: error instanceof Error ? error.message : String(error) };
+      sendState(session);
+      updateBadge();
     });
   };
 
   socket.onmessage = (event) => {
-    if (generation !== socketGeneration) return;
-    handleCommand(event.data).catch((error) => {
+    if (!isCurrent()) return;
+    handleCommand(session, event.data).catch((error) => {
       console.error("Aionda Browser MCP command failed", error);
     });
   };
 
   socket.onclose = () => {
-    if (generation !== socketGeneration) return;
-    setBadge("off", "#777777");
-    scheduleReconnect();
+    if (sessions.get(port) === session) sessions.delete(port);
+    updateBadge();
   };
 
   socket.onerror = () => {
-    if (generation !== socketGeneration) return;
     try {
       socket.close();
     } catch {
-      scheduleReconnect();
+      if (sessions.get(port) === session) sessions.delete(port);
     }
   };
 }
 
 function reconnect() {
-  ++socketGeneration;
-  if (socket) socket.close();
-  socket = null;
-  attachedTabId = null;
-  attachedTab = {};
+  ++settingsGeneration;
+  clearTimeout(scanTimer);
+  const closing = [...sessions.values()];
+  sessions.clear();
+  for (const session of closing) session.socket.close();
   connect();
 }
 
-function scheduleReconnect() {
-  clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(connect, 1500);
-}
-
-async function attachActiveTab() {
+async function attachActiveTab(session) {
   const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] });
   const tabs = windows.flatMap((window) => window.tabs || []).filter((tab) => tab.active);
   const tab = tabs.find((candidate) => isScriptableUrl(candidate.url)) || tabs[0];
   if (!tab) {
-    attachedTabId = null;
-    attachedTab = { attached: false, version: chrome.runtime.getManifest().version, error: "No active normal Chrome tab found." };
-    setBadge("idle", "#fbbc04");
-    sendState();
+    session.attachedTabId = null;
+    session.attachedTab = { attached: false, version: chrome.runtime.getManifest().version, error: "No active normal Chrome tab found." };
+    sendState(session);
+    updateBadge();
     return;
   }
-  await attachTab(tab);
+  await attachTab(session, tab);
 }
 
 async function findAttachableTab(urlContains) {
   const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] });
   const tabs = windows.flatMap((window) => window.tabs || []);
   const needle = typeof urlContains === "string" ? urlContains : "";
-  return tabs.find((tab) => isScriptableUrl(tab.url) && (!needle || (tab.url || "").includes(needle))) || null;
+  const matches = tabs.filter((tab) => isScriptableUrl(tab.url) && (!needle || (tab.url || "").includes(needle)));
+  return matches.find((tab) => tab.active) || matches[0] || null;
 }
 
-async function listVisibleTabs() {
+async function listVisibleTabs(session) {
   const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] });
   return windows.flatMap((window) => (window.tabs || []).map((tab) => ({
     id: tab.id,
@@ -179,38 +226,38 @@ async function listVisibleTabs() {
     title: tab.title || "",
     url: tab.url || "",
     scriptable: isScriptableUrl(tab.url),
+    attachedHere: tab.id === session.attachedTabId,
+    otherAgents: openSessions().filter((other) => other !== session && other.attachedTabId === tab.id).length,
   })));
 }
 
-async function attachTab(tab) {
-  if (!lastSettings.enabled || !isSocketOpen()) return;
+async function attachTab(session, tab) {
+  if (!lastSettings.enabled || !isSocketOpen(session)) return;
   if (!tab.id) return;
 
   if (!isScriptableUrl(tab.url)) {
-    attachedTabId = null;
-    attachedTab = tabToState(tab, false, unsupportedUrlMessage(tab.url));
-    setBadge("no", "#d93025");
-    sendState();
+    session.attachedTabId = null;
+    session.attachedTab = tabToState(tab, false, unsupportedUrlMessage(tab.url));
+    sendState(session);
+    updateBadge();
     return;
   }
 
+  session.attachedTabId = tab.id;
   try {
-    attachedTabId = tab.id;
-    attachedTab = tabToState(tab, true);
+    session.attachedTab = tabToState(tab, true);
     await ensureContentScript(tab.id);
-    setBadge("on", "#137333");
   } catch (error) {
     // Some Chrome-managed HTTPS pages block content scripts. Retain the tab
     // for screenshots; Chrome still enforces restrictions on each other API.
-    attachedTabId = tab.id;
-    attachedTab = tabToState(tab, true, error instanceof Error ? error.message : String(error));
-    setBadge("on", "#137333");
+    session.attachedTab = tabToState(tab, true, error instanceof Error ? error.message : String(error));
   }
 
-  sendState();
+  sendState(session);
+  updateBadge();
 }
 
-async function handleCommand(raw) {
+async function handleCommand(session, raw) {
   let message;
   try {
     message = JSON.parse(raw);
@@ -220,11 +267,11 @@ async function handleCommand(raw) {
 
   if (!message || message.type !== "command") return;
   const { id, command, payload } = message;
-  const response = await runCommand(command, payload ?? {});
-  send({ type: "response", id, response });
+  const response = await runCommand(session, command, payload ?? {});
+  send(session, { type: "response", id, response });
 }
 
-async function runCommand(command, payload) {
+async function runCommand(session, command, payload) {
   try {
     if (!lastSettings.enabled) throw new Error("Browser access is disabled in the extension settings.");
     if (command === "reloadExtension") {
@@ -233,61 +280,91 @@ async function runCommand(command, payload) {
     }
 
     if (command === "attach") {
-      const tab = await findAttachableTab(payload.urlContains);
+      if (payload.followActive === true) {
+        session.pinned = false;
+        await attachActiveTab(session);
+        return ok(stateOf(session));
+      }
+      const tab = typeof payload.tabId === "number"
+        ? await chrome.tabs.get(payload.tabId)
+        : await findAttachableTab(payload.urlContains);
       if (!tab) throw new Error(payload.urlContains ? `No scriptable tab matching "${payload.urlContains}" found.` : "No scriptable tab found.");
-      await attachTab(tab);
-      return ok(attachedTab);
+      if (!isScriptableUrl(tab.url)) throw new Error(unsupportedUrlMessage(tab.url));
+      session.pinned = true;
+      await attachTab(session, tab);
+      return ok(stateOf(session));
+    }
+
+    if (command === "openTab") {
+      const tab = payload.newWindow === true
+        ? (await chrome.windows.create({ url: payload.url, focused: payload.active !== false })).tabs?.[0]
+        : await chrome.tabs.create({ url: payload.url, active: payload.active !== false });
+      if (!tab?.id) throw new Error("Chrome did not create a tab.");
+      session.pinned = true;
+      session.attachedTabId = tab.id;
+      session.attachedTab = tabToState({ ...tab, url: tab.url || tab.pendingUrl || payload.url }, true);
+      sendState(session);
+      updateBadge();
+      return ok(stateOf(session));
     }
 
     if (command === "listTabs") {
-      return ok(await listVisibleTabs());
+      return ok(await listVisibleTabs(session));
     }
 
-    if (!attachedTabId) throw new Error("No tab is attached. Click the extension icon on the target tab.");
+    const tabId = session.attachedTabId;
+    if (!tabId) throw new Error("No tab is attached. Click the extension icon on the target tab, or use browser_attach or browser_open_tab.");
 
     if (command === "navigate") {
-      const tab = await chrome.tabs.update(attachedTabId, { url: payload.url });
-      attachedTab = tabToState(tab, true);
-      sendState();
-      return ok(attachedTab);
+      const tab = await chrome.tabs.update(tabId, { url: payload.url });
+      session.attachedTab = tabToState(tab, true);
+      sendState(session);
+      return ok(stateOf(session));
     }
 
     if (command === "screenshot") {
-      const screenshot = await captureAttachedTab({ format: "png" });
-      return ok(screenshot);
+      return ok(await exclusive(() => captureTab(tabId, { format: "png" })));
     }
 
     if (command === "screenshotFast") {
-      const screenshot = await captureAttachedTab({
+      const options = {
         format: payload.format === "png" ? "png" : "jpeg",
         quality: clampNumber(payload.quality, 1, 100, 55),
         maxWidth: clampNumber(payload.maxWidth, 320, 1920, 960),
         maxHeight: clampNumber(payload.maxHeight, 0, 2160, 0),
         grayscale: payload.grayscale === true,
         maxBytes: clampNumber(payload.maxBytes, 0, 2000000, 0),
-      });
-      return ok(screenshot);
+      };
+      return ok(await exclusive(() => captureTab(tabId, options)));
     }
 
     if (command === "clickAt") {
-      return ok(await dispatchMouseClick(attachedTabId, payload));
+      return ok(await exclusive(() => dispatchMouseClick(tabId, payload)));
     }
 
     if (command === "uploadFiles") {
-      return ok(await uploadFiles(attachedTabId, payload));
+      return ok(await exclusive(() => uploadFiles(tabId, payload)));
     }
 
     if (command === "evaluate") {
-      return ok(await evaluateInTab(attachedTabId, payload.code));
+      return ok(await exclusive(() => evaluateInTab(tabId, payload.code)));
     }
 
-    await ensureContentScript(attachedTabId);
-    const result = await sendCommandToAttachedFrames(attachedTabId, command, payload);
+    await ensureContentScript(tabId);
+    const result = await sendCommandToAttachedFrames(tabId, command, payload);
     if (result && result.ok === false) return result;
     return ok(result ?? null);
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error));
   }
+}
+
+// Screenshots and coordinate clicks focus their tab first, and Chrome allows a
+// single debugger per tab. Run these one at a time so agents do not interleave.
+function exclusive(task) {
+  const run = exclusiveQueue.then(task, task);
+  exclusiveQueue = run.catch(() => {});
+  return run;
 }
 
 // The Debugger API is the documented MV3 API for user-directed code execution.
@@ -437,11 +514,11 @@ async function getFrames(tabId) {
   }
 }
 
-async function captureAttachedTab(options) {
-  const tab = await chrome.tabs.get(attachedTabId);
+async function captureTab(tabId, options) {
+  const tab = await chrome.tabs.get(tabId);
   if (!isScriptableUrl(tab.url)) throw new Error(unsupportedUrlMessage(tab.url));
 
-  await chrome.tabs.update(attachedTabId, { active: true });
+  await chrome.tabs.update(tabId, { active: true });
   await chrome.windows.update(tab.windowId, { focused: true });
   await sleep(100);
 
@@ -591,13 +668,18 @@ function unsupportedUrlMessage(url) {
   return `Cannot attach to this URL. Chrome extensions cannot inject content scripts into ${url || "this tab"}. Open a normal http(s) page and click the extension icon there.`;
 }
 
-function sendState() {
-  send({ type: "state", state: attachedTabId ? attachedTab : { attached: false, version: chrome.runtime.getManifest().version } });
+function stateOf(session) {
+  const state = session.attachedTabId ? session.attachedTab : { attached: false, version: chrome.runtime.getManifest().version };
+  return { ...state, followsActiveTab: !session.pinned };
 }
 
-function send(message) {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify(message));
+function sendState(session) {
+  send(session, { type: "state", state: stateOf(session) });
+}
+
+function send(session, message) {
+  if (!isSocketOpen(session)) return;
+  session.socket.send(JSON.stringify(message));
 }
 
 function ok(result) {
@@ -606,6 +688,16 @@ function ok(result) {
 
 function fail(error) {
   return { ok: false, error };
+}
+
+function updateBadge() {
+  const open = lastSettings.enabled ? openSessions() : [];
+  const title = open.length > 1 ? `Aionda Browser MCP: ${open.length} AI agents connected` : "Attach tab to Aionda Browser MCP";
+  chrome.action.setTitle?.({ title });
+  if (open.length === 0) return setBadge("off", "#777777");
+  if (open.some((session) => session.attachedTabId)) return setBadge(open.length > 1 ? String(open.length) : "on", "#137333");
+  if (open.some((session) => session.attachedTab.attached === false && session.attachedTab.url)) return setBadge("no", "#d93025");
+  setBadge("idle", "#fbbc04");
 }
 
 function setBadge(text, color) {

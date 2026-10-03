@@ -8,6 +8,8 @@ import { z } from "zod";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18792;
+const DEFAULT_PORT_COUNT = 128;
+const MAX_PORT_COUNT = 1024;
 const DEFAULT_TOKEN = "aionda-browser-dev";
 const DEFAULT_TIMEOUT_MS = 10000;
 
@@ -18,6 +20,7 @@ type ExtensionState = {
   url?: string;
   title?: string;
   attached?: boolean;
+  followsActiveTab?: boolean;
   version?: string;
   error?: string;
 };
@@ -35,6 +38,7 @@ type PendingRequest = {
 type ServerOptions = {
   host: string;
   port: number;
+  portCount: number;
   token: string;
   timeoutMs: number;
 };
@@ -44,6 +48,8 @@ const pendingRequests = new Map<string, PendingRequest>();
 let extensionSocket: WebSocket | null = null;
 let extensionState: ExtensionState = {};
 let connectedAt: string | null = null;
+let relayPort: number | null = null;
+let relayServer: WebSocketServer | null = null;
 
 const browserServer = new McpServer({
   name: "aionda-browser-mcp",
@@ -54,7 +60,8 @@ browserServer.tool("browser_status", "Return relay and attached-tab status.", {}
   return textResult({
     relay: {
       host: options.host,
-      port: options.port,
+      port: relayPort,
+      portPool: `${options.port}-${lastPoolPort()}`,
       connected: isExtensionConnected(),
       connectedAt,
       attached: extensionState.attached === true,
@@ -70,12 +77,20 @@ browserServer.tool("browser_tab", "Return the currently attached browser tab.", 
 
 browserServer.tool(
   "browser_attach",
-  "Attach a Chrome tab. Optionally provide urlContains to select a tab by URL substring.",
-  { urlContains: z.string().optional() },
-  async ({ urlContains }) => textResult(await sendCommand("attach", compactPayload({ urlContains }), 5000))
+  "Attach a Chrome tab to this agent and keep it when the user switches tabs. Select by tabId (from browser_list_tabs) or urlContains; without either, the active scriptable tab is used. followActive: true returns to following the active tab.",
+  { urlContains: z.string().optional(), tabId: z.number().int().optional(), followActive: z.boolean().optional() },
+  async ({ urlContains, tabId, followActive }) =>
+    textResult(await sendCommand("attach", compactPayload({ urlContains, tabId, followActive }), 5000))
 );
 
-browserServer.tool("browser_list_tabs", "List normal Chrome tabs visible to the extension.", {}, async () => {
+browserServer.tool(
+  "browser_open_tab",
+  "Open a URL in a new tab (or window) and attach it to this agent. Use this when other AI agents may be using the browser at the same time.",
+  { url: z.string().url(), newWindow: z.boolean().optional(), active: z.boolean().optional() },
+  async ({ url, newWindow, active }) => textResult(await sendCommand("openTab", compactPayload({ url, newWindow, active }), 5000))
+);
+
+browserServer.tool("browser_list_tabs", "List normal Chrome tabs visible to the extension, including which tab this agent and other agents are attached to.", {}, async () => {
   return textResult(await sendCommand("listTabs", {}, 5000));
 });
 
@@ -199,31 +214,46 @@ browserServer.tool(
 );
 
 async function main() {
-  await startRelayServer(options);
+  relayServer = await startRelayServer(options);
 
   const transport = new StdioServerTransport();
   await browserServer.connect(transport);
+  exitWithClient();
 }
 
-function startRelayServer({ host, port, token }: ServerOptions): Promise<void> {
+// Each MCP client (AI agent) starts its own server. It takes the first free
+// port of the pool; the extension connects to every port in the pool.
+async function startRelayServer(serverOptions: ServerOptions): Promise<WebSocketServer> {
+  const last = lastPoolPort();
+  for (let port = serverOptions.port; port <= last; port += 1) {
+    try {
+      const wss = await listenOn(serverOptions, port);
+      relayPort = port;
+      console.error(`aionda-browser-mcp relay listening on ws://${serverOptions.host}:${port}/relay`);
+      return wss;
+    } catch (error) {
+      if (!isAddressInUseError(error)) throw error;
+    }
+  }
+  throw new Error(
+    `All relay ports ${serverOptions.port}-${last} on ${serverOptions.host} are in use. ` +
+      "Close another MCP client using the browser, or raise the port pool size in both the server and the extension."
+  );
+}
+
+function listenOn({ host, token }: ServerOptions, port: number): Promise<WebSocketServer> {
   return new Promise((resolve, reject) => {
     const wss = new WebSocketServer({ host, port, path: "/relay" });
 
-    wss.on("error", (error) => {
-      if (isAddressInUseError(error)) {
-        console.error(
-          `aionda-browser-mcp cannot start: 127.0.0.1:${options.port} is already in use. ` +
-            "Stop the other MCP client using this relay, or configure a different port in both the server and extension."
-        );
-      } else {
-        console.error("aionda-browser-mcp relay error:", error);
-      }
+    wss.once("error", (error) => {
+      wss.close();
       reject(error);
     });
 
-    wss.on("listening", () => {
-      console.error(`aionda-browser-mcp relay listening on ws://${host}:${port}/relay`);
-      resolve();
+    wss.once("listening", () => {
+      wss.removeAllListeners("error");
+      wss.on("error", (error) => console.error("aionda-browser-mcp relay error:", error));
+      resolve(wss);
     });
 
     wss.on("connection", (socket, request) => {
@@ -252,6 +282,25 @@ function startRelayServer({ host, port, token }: ServerOptions): Promise<void> {
       });
     });
   });
+}
+
+// A server outliving its MCP client would hold a pool port forever. Exit when
+// stdin closes or the parent process is gone.
+function exitWithClient() {
+  const parentPid = process.ppid;
+  const shutdown = () => {
+    relayServer?.close();
+    process.exit(0);
+  };
+  process.stdin.on("end", shutdown);
+  process.stdin.on("close", shutdown);
+  setInterval(() => {
+    if (process.ppid !== parentPid) shutdown();
+  }, 5000).unref();
+}
+
+function lastPoolPort() {
+  return Math.min(65535, options.port + options.portCount - 1);
 }
 
 function isAddressInUseError(error: unknown): boolean {
@@ -370,9 +419,11 @@ function compactPayload(payload: Record<string, JsonValue | undefined>): JsonVal
 
 function parseOptions(args: string[]): ServerOptions {
   const port = Number(readFlag(args, "--port") ?? process.env.AIONDA_BROWSER_PORT ?? DEFAULT_PORT);
+  const portCount = Number(readFlag(args, "--port-count") ?? process.env.AIONDA_BROWSER_PORT_COUNT ?? DEFAULT_PORT_COUNT);
   return {
     host: readFlag(args, "--host") ?? process.env.AIONDA_BROWSER_HOST ?? DEFAULT_HOST,
-    port: Number.isFinite(port) ? port : DEFAULT_PORT,
+    port: Number.isInteger(port) && port > 0 && port <= 65535 ? port : DEFAULT_PORT,
+    portCount: Number.isInteger(portCount) ? Math.min(MAX_PORT_COUNT, Math.max(1, portCount)) : DEFAULT_PORT_COUNT,
     token: readFlag(args, "--token") ?? process.env.AIONDA_BROWSER_TOKEN ?? DEFAULT_TOKEN,
     timeoutMs: Number(readFlag(args, "--timeout-ms") ?? process.env.AIONDA_BROWSER_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS),
   };
