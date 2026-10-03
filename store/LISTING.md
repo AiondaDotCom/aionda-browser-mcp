@@ -43,7 +43,7 @@ Full instructions, configuration JSON and troubleshooting:
 https://github.com/AiondaDotCom/aionda-browser-mcp#installation
 
 LOCAL CONNECTION, YOUR CONTROL
-No Aionda account or cloud relay. The extension connects only to localhost. While access is enabled, it follows your active tab. Your MCP client receives tab information, requested page content, screenshots and action results; that client may send these to its AI provider. Enable access only for trusted clients and pages. Disable it in Options at any time.
+No Aionda account or cloud relay. The extension connects only to localhost. While access is enabled, each connected assistant follows your active tab until it selects or opens its own tab. Your MCP client receives tab information, requested page content, screenshots and action results; that client may send these to its AI provider. Enable access only for trusted clients and pages. Disable it in Options at any time.
 
 Chrome's Debugger API is used for coordinate clicks, JavaScript evaluation and file inputs. Chrome may display a debugging banner. Internal pages, Web Store pages and managed environments may restrict some actions. The extension and local server are free and open source; your chosen AI service may have its own costs.
 
