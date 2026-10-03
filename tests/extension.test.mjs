@@ -117,3 +117,22 @@ test('each agent keeps its own tab', async () => {
   const listed = await vm.runInContext('runCommand', h.context)(a, 'listTabs', {});
   assert.deepEqual(listed.result.map((tab) => [tab.id, tab.attachedHere, tab.otherAgents]), [[1, true, 0], [2, false, 1]]);
 });
+
+test('a late follow-the-active-tab attach does not undo browser_open_tab', async () => {
+  const h = harness();
+  h.settings.enabled = true;
+  await vm.runInContext('connect()', h.context);
+  h.sockets[0].open();
+  await new Promise(resolve => setImmediate(resolve));
+  const session = vm.runInContext('sessions.get(18792)', h.context);
+  const runCommand = vm.runInContext('runCommand', h.context);
+  const attachTab = vm.runInContext('attachTab', h.context);
+  const newTab = { id: 3, windowId: 1, active: true, url: '', pendingUrl: 'https://three.example/' };
+  h.chrome.tabs.create = async () => newTab;
+  const opened = await runCommand(session, 'openTab', { url: 'https://three.example/' });
+  // onActivated for the new tab is handled after the open command pinned it.
+  await attachTab(session, newTab, { follow: true });
+  assert.equal(opened.result.tabId, 3);
+  assert.equal(session.attachedTabId, 3);
+  assert.equal(session.pinned, true);
+});

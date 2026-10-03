@@ -53,7 +53,7 @@ let relayServer: WebSocketServer | null = null;
 
 const browserServer = new McpServer({
   name: "aionda-browser-mcp",
-  version: "0.2.0",
+  version: "0.2.1",
 });
 
 browserServer.tool("browser_status", "Return relay and attached-tab status.", {}, async () => {

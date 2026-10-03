@@ -50,7 +50,8 @@ chrome.action.onClicked.addListener(async (tab) => {
   if (open.length === 0) return connect();
   // Agents that picked their own tab keep it, unless every agent did.
   const following = open.filter((session) => !session.pinned);
-  await Promise.all((following.length ? following : open).map((session) => attachTab(session, tab)));
+  if (following.length) await Promise.all(following.map((session) => attachTab(session, tab, { follow: true })));
+  else await Promise.all(open.map((session) => attachTab(session, tab)));
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -60,7 +61,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   for (const session of openSessions()) {
     if (!session.pinned && tab.active && changeInfo.status === "complete") {
-      attachTab(session, tab).catch(() => {});
+      attachTab(session, tab, { follow: true }).catch(() => {});
       continue;
     }
 
@@ -83,7 +84,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   const following = openSessions().filter((session) => !session.pinned);
   if (following.length === 0) return;
   const tab = await chrome.tabs.get(tabId);
-  await Promise.all(following.map((session) => attachTab(session, tab)));
+  await Promise.all(following.map((session) => attachTab(session, tab, { follow: true })));
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -159,6 +160,7 @@ function openSession(port, generation) {
     if (!isCurrent()) return;
     updateBadge();
     attachActiveTab(session).catch((error) => {
+      if (session.pinned) return;
       session.attachedTab = { attached: false, version: chrome.runtime.getManifest().version, error: error instanceof Error ? error.message : String(error) };
       sendState(session);
       updateBadge();
@@ -197,6 +199,7 @@ function reconnect() {
 
 async function attachActiveTab(session) {
   const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] });
+  if (session.pinned) return;
   const tabs = windows.flatMap((window) => window.tabs || []).filter((tab) => tab.active);
   const tab = tabs.find((candidate) => isScriptableUrl(candidate.url)) || tabs[0];
   if (!tab) {
@@ -206,7 +209,7 @@ async function attachActiveTab(session) {
     updateBadge();
     return;
   }
-  await attachTab(session, tab);
+  await attachTab(session, tab, { follow: true });
 }
 
 async function findAttachableTab(urlContains) {
@@ -231,9 +234,12 @@ async function listVisibleTabs(session) {
   })));
 }
 
-async function attachTab(session, tab) {
+// follow: the attach comes from following the active tab. It must not
+// override a tab the agent picked meanwhile (browser_open_tab activates its new
+// tab, and the resulting onActivated event arrives before the pin is set).
+async function attachTab(session, tab, { follow = false } = {}) {
   if (!lastSettings.enabled || !isSocketOpen(session)) return;
-  if (!tab.id) return;
+  if (!tab.id || (follow && session.pinned)) return;
 
   if (!isScriptableUrl(tab.url)) {
     session.attachedTabId = null;
@@ -248,10 +254,12 @@ async function attachTab(session, tab) {
     session.attachedTab = tabToState(tab, true);
     await ensureContentScript(tab.id);
   } catch (error) {
+    if (follow && session.pinned) return;
     // Some Chrome-managed HTTPS pages block content scripts. Retain the tab
     // for screenshots; Chrome still enforces restrictions on each other API.
     session.attachedTab = tabToState(tab, true, error instanceof Error ? error.message : String(error));
   }
+  if (follow && session.pinned) return;
 
   sendState(session);
   updateBadge();
