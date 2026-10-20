@@ -136,3 +136,39 @@ test('a late follow-the-active-tab attach does not undo browser_open_tab', async
   assert.equal(session.attachedTabId, 3);
   assert.equal(session.pinned, true);
 });
+
+test('shared relay requests route to independent tabs without changing the default session', async () => {
+  const h = harness();
+  vm.runInContext(`
+    lastSettings.enabled = true;
+    const shared = {port:18792,socket:{readyState:1,send(){}},attachedTabId:999,attachedTab:{},pinned:false};
+    const routed = [];
+    sendCommandToAttachedFrames = async (tabId) => { routed.push(tabId); return {tabId}; };
+  `,h.context);
+  await vm.runInContext(`Promise.all([1,2].map(tabId => handleCommand(shared,JSON.stringify({
+    type:'command',id:String(tabId),command:'snapshot',payload:{tabId,_sharedClient:true}
+  }))))`,h.context);
+  assert.deepEqual(Array.from(vm.runInContext('routed',h.context)).sort(),[1,2]);
+  assert.equal(vm.runInContext('shared.attachedTabId',h.context),999);
+});
+
+test('shared relay queues same-tab operations while allowing other tabs', async () => {
+  const h = harness();
+  h.context.pause = () => new Promise(resolve => setImmediate(resolve));
+  vm.runInContext(`
+    const shared = {port:18792,socket:{readyState:1,send(){}},attachedTabId:999};
+    const active = new Set(); let overlap = false; let parallel = false;
+    runCommand = async (session,command,payload) => {
+      if (active.has(payload.tabId)) overlap = true;
+      active.add(payload.tabId);
+      if (active.size > 1) parallel = true;
+      await pause(); active.delete(payload.tabId);
+      return {ok:true,result:null};
+    };
+  `,h.context);
+  await vm.runInContext(`Promise.all([1,1,2].map((tabId,id) => handleCommand(shared,JSON.stringify({
+    type:'command',id:String(id),command:'snapshot',payload:{tabId,_sharedClient:true}
+  }))))`,h.context);
+  assert.equal(vm.runInContext('overlap',h.context),false);
+  assert.equal(vm.runInContext('parallel',h.context),true);
+});

@@ -1,15 +1,11 @@
 #!/usr/bin/env node
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { URL } from "node:url";
+import { RelayClient } from "./relay-client.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { WebSocket, WebSocketServer } from "ws";
 import { z } from "zod";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18792;
-const DEFAULT_PORT_COUNT = 128;
-const MAX_PORT_COUNT = 1024;
 const DEFAULT_TOKEN = "aionda-browser-dev";
 const DEFAULT_TIMEOUT_MS = 10000;
 
@@ -20,77 +16,52 @@ type ExtensionState = {
   url?: string;
   title?: string;
   attached?: boolean;
-  followsActiveTab?: boolean;
   version?: string;
   error?: string;
-};
-
-type RelayResponse =
-  | { ok: true; result: JsonValue }
-  | { ok: false; error: string };
-
-type PendingRequest = {
-  resolve: (value: JsonValue) => void;
-  reject: (reason: Error) => void;
-  timer: NodeJS.Timeout;
 };
 
 type ServerOptions = {
   host: string;
   port: number;
-  portCount: number;
   token: string;
   timeoutMs: number;
 };
 
 const options = parseOptions(process.argv.slice(2));
-const pendingRequests = new Map<string, PendingRequest>();
-let extensionSocket: WebSocket | null = null;
-let extensionState: ExtensionState = {};
-let connectedAt: string | null = null;
-let relayPort: number | null = null;
-let relayServer: WebSocketServer | null = null;
+const relay = new RelayClient(options);
+const sendCommand = (command: string, payload: JsonValue, timeoutMs = options.timeoutMs) =>
+  relay.request(command, payload, timeoutMs);
 
 const browserServer = new McpServer({
   name: "aionda-browser-mcp",
-  version: "0.2.1",
+  version: "0.3.0",
 });
 
 browserServer.tool("browser_status", "Return relay and attached-tab status.", {}, async () => {
-  return textResult({
-    relay: {
-      host: options.host,
-      port: relayPort,
-      portPool: `${options.port}-${lastPoolPort()}`,
-      connected: isExtensionConnected(),
-      connectedAt,
-      attached: extensionState.attached === true,
-    },
-    tab: extensionState,
-  });
+  return textResult(await relay.request("status", {}, options.timeoutMs));
 });
 
 browserServer.tool("browser_tab", "Return the currently attached browser tab.", {}, async () => {
-  if (!isExtensionConnected()) return errorResult("Chrome extension is not connected to the relay.");
-  return textResult(extensionState);
+  const status = await relay.request("status", {}, options.timeoutMs) as { relay: { connected: boolean }; tab: ExtensionState };
+  if (!status.relay.connected) return errorResult("Chrome extension is not connected to the relay.");
+  return textResult(status.tab);
 });
 
 browserServer.tool(
   "browser_attach",
-  "Attach a Chrome tab to this agent and keep it when the user switches tabs. Select by tabId (from browser_list_tabs) or urlContains; without either, the active scriptable tab is used. followActive: true returns to following the active tab.",
-  { urlContains: z.string().optional(), tabId: z.number().int().optional(), followActive: z.boolean().optional() },
-  async ({ urlContains, tabId, followActive }) =>
-    textResult(await sendCommand("attach", compactPayload({ urlContains, tabId, followActive }), 5000))
+  "Select a Chrome tab for this MCP session, independent of other clients. Provide tabId from browser_list_tabs or urlContains.",
+  { urlContains: z.string().optional(), tabId: z.number().int().positive().optional(), followActive: z.boolean().optional() },
+  async ({ urlContains, tabId, followActive }) => textResult(await sendCommand("attach", compactPayload({ urlContains, tabId, followActive }), 5000))
 );
 
 browserServer.tool(
   "browser_open_tab",
-  "Open a URL in a new tab (or window) and attach it to this agent. Use this when other AI agents may be using the browser at the same time.",
+  "Open a URL in a new tab (or window) and attach it to this MCP session.",
   { url: z.string().url(), newWindow: z.boolean().optional(), active: z.boolean().optional() },
   async ({ url, newWindow, active }) => textResult(await sendCommand("openTab", compactPayload({ url, newWindow, active }), 5000))
 );
 
-browserServer.tool("browser_list_tabs", "List normal Chrome tabs visible to the extension, including which tab this agent and other agents are attached to.", {}, async () => {
+browserServer.tool("browser_list_tabs", "List normal Chrome tabs visible to the extension.", {}, async () => {
   return textResult(await sendCommand("listTabs", {}, 5000));
 });
 
@@ -179,7 +150,7 @@ browserServer.tool(
 
 browserServer.tool(
   "browser_evaluate",
-  "Evaluate a JavaScript expression in an isolated page world via Chrome's Debugger API. Use only for trusted pages. Returns JSON-serializable results.",
+  "Evaluate JavaScript in an isolated page world through the Debugger API. Use only for trusted pages.",
   { code: z.string() },
   async ({ code }) => textResult(await sendCommand("evaluate", { code }))
 );
@@ -214,172 +185,13 @@ browserServer.tool(
 );
 
 async function main() {
-  relayServer = await startRelayServer(options);
-
   const transport = new StdioServerTransport();
   await browserServer.connect(transport);
-  exitWithClient();
-}
-
-// Each MCP client (AI agent) starts its own server. It takes the first free
-// port of the pool; the extension connects to every port in the pool.
-async function startRelayServer(serverOptions: ServerOptions): Promise<WebSocketServer> {
-  const last = lastPoolPort();
-  for (let port = serverOptions.port; port <= last; port += 1) {
-    try {
-      const wss = await listenOn(serverOptions, port);
-      relayPort = port;
-      console.error(`aionda-browser-mcp relay listening on ws://${serverOptions.host}:${port}/relay`);
-      return wss;
-    } catch (error) {
-      if (!isAddressInUseError(error)) throw error;
-    }
-  }
-  throw new Error(
-    `All relay ports ${serverOptions.port}-${last} on ${serverOptions.host} are in use. ` +
-      "Close another MCP client using the browser, or raise the port pool size in both the server and the extension."
-  );
-}
-
-function listenOn({ host, token }: ServerOptions, port: number): Promise<WebSocketServer> {
-  return new Promise((resolve, reject) => {
-    const wss = new WebSocketServer({ host, port, path: "/relay" });
-
-    wss.once("error", (error) => {
-      wss.close();
-      reject(error);
-    });
-
-    wss.once("listening", () => {
-      wss.removeAllListeners("error");
-      wss.on("error", (error) => console.error("aionda-browser-mcp relay error:", error));
-      resolve(wss);
-    });
-
-    wss.on("connection", (socket, request) => {
-      const url = new URL(request.url ?? "/relay", `http://${host}:${port}`);
-      if (!isTokenValid(url.searchParams.get("token"), token)) {
-        socket.close(1008, "invalid token");
-        return;
-      }
-
-      if (extensionSocket && extensionSocket.readyState === WebSocket.OPEN) {
-        extensionSocket.close(1012, "replaced by a newer extension connection");
-      }
-
-      extensionSocket = socket;
-      connectedAt = new Date().toISOString();
-      extensionState = {};
-
-      socket.on("message", (raw) => handleRelayMessage(raw.toString()));
-      socket.on("close", () => {
-        if (extensionSocket === socket) {
-          extensionSocket = null;
-          extensionState = {};
-          connectedAt = null;
-          rejectAllPending("Chrome extension disconnected.");
-        }
-      });
-    });
-  });
-}
-
-// A server outliving its MCP client would hold a pool port forever. Exit when
-// stdin closes or the parent process is gone.
-function exitWithClient() {
-  const parentPid = process.ppid;
-  const shutdown = () => {
-    relayServer?.close();
-    process.exit(0);
-  };
+  const shutdown = () => { relay.close(); process.exit(0); };
   process.stdin.on("end", shutdown);
   process.stdin.on("close", shutdown);
-  setInterval(() => {
-    if (process.ppid !== parentPid) shutdown();
-  }, 5000).unref();
-}
-
-function lastPoolPort() {
-  return Math.min(65535, options.port + options.portCount - 1);
-}
-
-function isAddressInUseError(error: unknown): boolean {
-  return error instanceof Error && (error as NodeJS.ErrnoException).code === "EADDRINUSE";
-}
-
-function handleRelayMessage(raw: string) {
-  let message: unknown;
-  try {
-    message = JSON.parse(raw);
-  } catch {
-    return;
-  }
-
-  if (!message || typeof message !== "object") return;
-  const record = message as Record<string, unknown>;
-
-  if (record.type === "state" && record.state && typeof record.state === "object") {
-    extensionState = record.state as ExtensionState;
-    return;
-  }
-
-  if (record.type !== "response" || typeof record.id !== "string") return;
-  const pending = pendingRequests.get(record.id);
-  if (!pending) return;
-  pendingRequests.delete(record.id);
-  clearTimeout(pending.timer);
-
-  const response = record as { id: string; response?: RelayResponse };
-  if (!response.response) {
-    pending.reject(new Error("Malformed relay response."));
-    return;
-  }
-
-  if (response.response.ok) pending.resolve(response.response.result);
-  else pending.reject(new Error(response.response.error));
-}
-
-async function sendCommand(command: string, payload: JsonValue, timeoutMs = options.timeoutMs): Promise<JsonValue> {
-  if (!isExtensionConnected() || !extensionSocket) {
-    throw new Error("Chrome extension is not connected. Start the MCP server, load the extension, then click its toolbar icon on the target tab.");
-  }
-
-  const id = randomUUID();
-  const message = JSON.stringify({ type: "command", id, command, payload });
-
-  return await new Promise<JsonValue>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pendingRequests.delete(id);
-      reject(new Error(`Timed out waiting for browser command "${command}".`));
-    }, timeoutMs);
-
-    pendingRequests.set(id, { resolve, reject, timer });
-    extensionSocket?.send(message, (error) => {
-      if (!error) return;
-      clearTimeout(timer);
-      pendingRequests.delete(id);
-      reject(error);
-    });
-  });
-}
-
-function rejectAllPending(message: string) {
-  for (const [id, pending] of pendingRequests) {
-    clearTimeout(pending.timer);
-    pending.reject(new Error(message));
-    pendingRequests.delete(id);
-  }
-}
-
-function isExtensionConnected() {
-  return extensionSocket?.readyState === WebSocket.OPEN;
-}
-
-function isTokenValid(received: string | null, expected: string) {
-  if (!received) return false;
-  const receivedHash = createHash("sha256").update(received).digest();
-  const expectedHash = createHash("sha256").update(expected).digest();
-  return timingSafeEqual(receivedHash, expectedHash);
+  const parentPid = process.ppid;
+  setInterval(() => { if (process.ppid !== parentPid) shutdown(); }, 5000).unref();
 }
 
 function textResult(value: JsonValue | ExtensionState) {
@@ -419,11 +231,9 @@ function compactPayload(payload: Record<string, JsonValue | undefined>): JsonVal
 
 function parseOptions(args: string[]): ServerOptions {
   const port = Number(readFlag(args, "--port") ?? process.env.AIONDA_BROWSER_PORT ?? DEFAULT_PORT);
-  const portCount = Number(readFlag(args, "--port-count") ?? process.env.AIONDA_BROWSER_PORT_COUNT ?? DEFAULT_PORT_COUNT);
   return {
     host: readFlag(args, "--host") ?? process.env.AIONDA_BROWSER_HOST ?? DEFAULT_HOST,
-    port: Number.isInteger(port) && port > 0 && port <= 65535 ? port : DEFAULT_PORT,
-    portCount: Number.isInteger(portCount) ? Math.min(MAX_PORT_COUNT, Math.max(1, portCount)) : DEFAULT_PORT_COUNT,
+    port: Number.isFinite(port) ? port : DEFAULT_PORT,
     token: readFlag(args, "--token") ?? process.env.AIONDA_BROWSER_TOKEN ?? DEFAULT_TOKEN,
     timeoutMs: Number(readFlag(args, "--timeout-ms") ?? process.env.AIONDA_BROWSER_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS),
   };

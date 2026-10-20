@@ -30,7 +30,7 @@ Use the copy icon inside the configuration block on the extension's Options page
   "mcpServers": {
     "aionda-browser": {
       "command": "npx",
-      "args": ["-y", "aionda-browser-mcp@0.2.1"]
+      "args": ["-y", "aionda-browser-mcp@0.3.0"]
     }
   }
 }
@@ -38,14 +38,14 @@ Use the copy icon inside the configuration block on the extension's Options page
 
 Restart the MCP client. It downloads the npm package and starts the server automatically. The first launch requires an internet connection.
 
-On Windows, clients that cannot launch `npx` directly can use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "aionda-browser-mcp@0.2.1"]`.
+On Windows, clients that cannot launch `npx` directly can use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "aionda-browser-mcp@0.3.0"]`.
 
 #### Global installation
 
 If you prefer to install the server explicitly, use **Copy command** on the Options page or run:
 
 ```sh
-npm install --global aionda-browser-mcp@0.2.1
+npm install --global aionda-browser-mcp@0.3.0
 ```
 
 Then configure your MCP client with `"command": "aionda-browser-mcp"` and `"args": []`. If your desktop client cannot find the command, use its absolute path (`command -v aionda-browser-mcp` on macOS/Linux or `where aionda-browser-mcp` on Windows).
@@ -66,30 +66,25 @@ While enabled, the extension follows the active tab. An MCP client can also sele
 
 ### Several AI agents at once
 
-Every MCP client starts its own server, and each server takes the first free port of a pool: by default the 128 ports `18792`–`18919`. The extension connects to every server in the pool, so several agents (for example Claude Code and Codex, or parallel sessions) can use the same Chrome at the same time.
-
-- Each agent has its own attached tab. A new agent follows the active tab.
-- `browser_attach` (by `tabId` or `urlContains`) and `browser_open_tab` give the agent its own tab, which it keeps when you or another agent switch tabs. `browser_attach` with `followActive: true` returns to following the active tab.
-- `browser_list_tabs` shows which tab the calling agent is attached to (`attachedHere`) and how many other agents use each tab (`otherAgents`).
-- Screenshots and coordinate clicks bring their tab to the front. The extension runs these, as well as JavaScript evaluation and file uploads, one at a time. For parallel visual work, give each agent its own window: `browser_open_tab` with `newWindow: true`.
-- Agents sharing one tab also share its element refs: a snapshot by one agent invalidates the refs of the other.
-- The badge shows `on` for one connected agent and the number of agents when several are connected.
-
-The extension checks the ports just above the highest connected one every 2 seconds and the whole pool every 20 seconds. A server exits when its MCP client closes stdin or exits, so it does not keep a pool port occupied.
+Each MCP client has a separate stdio connection and shares one independent relay.
+Use `browser_attach(tabId)` or `browser_open_tab` to pin a tab to that client.
+Normal commands for different tabs can run concurrently; operations for the same
+tab and focus-sensitive operations are queued. Older extensions (before 0.3)
+are supported through a serialized select-tab-and-command compatibility path.
+See [Multiple agents and macOS service](#multiple-agents-and-macos-service).
 
 ### Custom token or port
 
-Use the **eye icon** beside the relay token to reveal or conceal it, and the **copy icon** to copy its value. A checkmark briefly confirms a successful copy. Set the same values in the extension and in the MCP server's environment. A custom port is the first port of the pool:
+Use the **eye icon** beside the relay token to reveal or conceal it, and the **copy icon** to copy its value. A checkmark briefly confirms a successful copy. Set the same values in the extension and in the MCP server's environment. A custom port selects the shared relay:
 
 ```json
 {
   "mcpServers": {
     "aionda-browser": {
       "command": "npx",
-      "args": ["-y", "aionda-browser-mcp@0.2.1"],
+      "args": ["-y", "aionda-browser-mcp@0.3.0"],
       "env": {
         "AIONDA_BROWSER_PORT": "18792",
-        "AIONDA_BROWSER_PORT_COUNT": "128",
         "AIONDA_BROWSER_TOKEN": "REPLACE_WITH_YOUR_OWN_RANDOM_TOKEN"
       }
     }
@@ -102,12 +97,11 @@ Use your own random token on shared machines. Keep the relay on localhost. The d
 | Setting | Environment variable | Default |
 | --- | --- | --- |
 | Host | `AIONDA_BROWSER_HOST` | `127.0.0.1` |
-| First port of the pool | `AIONDA_BROWSER_PORT` | `18792` |
-| Number of pool ports (1–1024) | `AIONDA_BROWSER_PORT_COUNT` | `128` |
+| Relay port | `AIONDA_BROWSER_PORT` | `18792` |
 | Token | `AIONDA_BROWSER_TOKEN` | `aionda-browser-dev` |
 | Command timeout | `AIONDA_BROWSER_TIMEOUT_MS` | `10000` |
 
-Equivalent CLI flags are `--host`, `--port`, `--port-count`, `--token` and `--timeout-ms`. The first port and the pool size must match the extension's settings.
+Equivalent CLI flags are `--host`, `--port`, `--token` and `--timeout-ms`. The relay port must be included in the extension's configured range.
 
 ## Tools
 
@@ -130,12 +124,12 @@ Prefer `browser_snapshot_compact` for smaller text results and `browser_screensh
 ## Troubleshooting
 
 - **Badge off / extension disconnected:** Start or restart your MCP client, enable browser access, and check that the host, port and token match. Check Chrome's site-access setting for the extension.
-- **All relay ports in use:** Every port of the pool is taken by a running MCP client. Close one, or raise the pool size in both the extension and the server. The server never stops another process automatically.
+- **Incompatible relay on the port:** Stop the old relay once when upgrading. The server never stops another process automatically.
 - **Agents switch each other's tab:** Agents that follow the active tab move along when another agent brings its tab to the front. Use `browser_open_tab` or `browser_attach` to give each agent its own tab.
 - **No tab attached:** Open a normal website and click the toolbar icon. Chrome restricts internal pages, the Web Store and some managed pages.
 - **Node or npx not found:** Restart your desktop client after installing Node.js or use an absolute command path.
 - **Debugger action fails:** Chrome may show a debugging banner. Another debugger or an enterprise policy can prevent coordinate clicks, uploads and evaluation.
-- **Connection stops when the client exits:** Expected; the relay runs for the lifetime of its MCP client.
+- **Connection stops when a client exits:** The shared relay survives individual clients. Check the macOS service logs if the relay itself is unavailable.
 - **Remote MCP client:** This release expects Chrome and the relay on the same computer. Installing the server on another host alone does not connect it to your local Chrome.
 
 ## Privacy and permissions
@@ -163,3 +157,43 @@ Reload the extension after changing its files. Run `npm run package:extension` t
 ## Support and license
 
 [Report an issue](https://github.com/AiondaDotCom/aionda-browser-mcp/issues). Do not include private page data or tokens in public issues. MIT licensed; see [LICENSE](LICENSE).
+
+## Multiple agents and macOS service
+
+Each Codex/Claude Code instance has its own stdio MCP process. All processes share
+one authenticated WebSocket relay; concurrent starts do not compete for the port.
+Without a service, the relay starts as a detached process on the first tool call
+and exits after up to 30 seconds without MCP connections. Closing the client that
+started it does not interrupt other clients. Failed commands are never replayed
+automatically; the next call reconnects after a relay restart.
+
+For a persistent macOS user service (starts at login and restarts on failure):
+
+```bash
+npm run service:install
+launchctl print gui/$(id -u)/com.aionda.browser-relay
+```
+
+The installer uses this installation's absolute Node and relay paths. Reinstall
+the service if you move the installation or change Node. Set
+`AIONDA_BROWSER_TOKEN` and `AIONDA_BROWSER_PORT` when installing if customized.
+Logs are in `~/Library/Logs/aionda-browser-mcp/relay.log`. To remove the service:
+
+```bash
+launchctl bootout gui/$(id -u)/com.aionda.browser-relay
+rm ~/Library/LaunchAgents/com.aionda.browser-relay.plist
+```
+
+Each agent should call `browser_list_tabs`, then `browser_attach` with a `tabId`
+(or `urlContains`). Its tab selection is pinned to that MCP connection; changing
+the active Chrome tab or another agent's selection does not change it. Commands
+for the same tab are queued. Different tabs can run concurrently; screenshots
+and coordinate clicks are serialized globally because they change Chrome focus.
+Multiple agents sharing one MCP connection also share its tab selection: give
+each agent its own MCP connection for independent tabs. Agents editing the same
+tab still need to coordinate multi-step workflows and snapshot references.
+
+When upgrading from a relay embedded in an older MCP process, stop the old relay once and reload the unpacked Chrome
+extension from this installation for full parallel execution. Older store extensions
+remain usable with serialized commands. Old MCP processes also need to reconnect or
+restart. The server never kills a process occupying the relay port automatically.

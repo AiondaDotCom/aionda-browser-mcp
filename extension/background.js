@@ -265,6 +265,8 @@ async function attachTab(session, tab, { follow = false } = {}) {
   updateBadge();
 }
 
+const tabQueues = new Map();
+
 async function handleCommand(session, raw) {
   let message;
   try {
@@ -275,7 +277,18 @@ async function handleCommand(session, raw) {
 
   if (!message || message.type !== "command") return;
   const { id, command, payload } = message;
-  const response = await runCommand(session, command, payload ?? {});
+  // Shared-relay clients pass a pinned tab; preserve legacy port-pool sessions.
+  const target = payload?._sharedClient ? { ...session } : session;
+  if (payload?._sharedClient && Number.isInteger(payload.tabId) && command !== "attach") {
+    target.attachedTabId = payload.tabId;
+    target.pinned = true;
+  }
+  const key = payload?.tabId ?? target.attachedTabId ?? session.port;
+  const task = (tabQueues.get(key) ?? Promise.resolve()).catch(() => {}).then(
+    () => runCommand(target, command, payload ?? {}));
+  tabQueues.set(key, task);
+  const response = await task;
+  if (tabQueues.get(key) === task) tabQueues.delete(key);
   send(session, { type: "response", id, response });
 }
 
@@ -304,9 +317,9 @@ async function runCommand(session, command, payload) {
     }
 
     if (command === "openTab") {
-      const tab = payload.newWindow === true
+      const tab = await exclusive(async () => payload.newWindow === true
         ? (await chrome.windows.create({ url: payload.url, focused: payload.active !== false })).tabs?.[0]
-        : await chrome.tabs.create({ url: payload.url, active: payload.active !== false });
+        : await chrome.tabs.create({ url: payload.url, active: payload.active !== false }));
       if (!tab?.id) throw new Error("Chrome did not create a tab.");
       session.pinned = true;
       session.attachedTabId = tab.id;
@@ -322,6 +335,10 @@ async function runCommand(session, command, payload) {
 
     const tabId = session.attachedTabId;
     if (!tabId) throw new Error("No tab is attached. Click the extension icon on the target tab, or use browser_attach or browser_open_tab.");
+
+    if (command === "tab") {
+      return ok(tabToState(await chrome.tabs.get(tabId), true));
+    }
 
     if (command === "navigate") {
       const tab = await chrome.tabs.update(tabId, { url: payload.url });
