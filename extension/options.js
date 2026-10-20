@@ -1,33 +1,94 @@
-const DEFAULTS = {
-  host: "127.0.0.1",
-  port: 18792,
-  token: "aionda-browser-dev",
-};
-
+const DEFAULTS = { host: "127.0.0.1", port: 18792, portCount: 128, token: "aionda-browser-dev", enabled: false };
 const host = document.getElementById("host");
 const port = document.getElementById("port");
+const portCount = document.getElementById("port-count");
 const token = document.getElementById("token");
-const save = document.getElementById("save");
+const enabled = document.getElementById("enabled");
 const status = document.getElementById("status");
-
-load();
-save.addEventListener("click", persist);
-
+const copyResetTimers = new WeakMap();
+for (const button of document.querySelectorAll("[data-copy-target]")) {
+  button.addEventListener("click", async () => {
+    try {
+      let text = document.getElementById(button.dataset.copyTarget).textContent;
+      if (button.dataset.copyTarget === "mcp-config") {
+        const settings = readSettings();
+        const configuration = JSON.parse(text);
+        configuration.mcpServers["aionda-browser"].env = {
+          AIONDA_BROWSER_HOST: settings.host,
+          AIONDA_BROWSER_PORT: String(settings.port),
+          AIONDA_BROWSER_PORT_COUNT: String(settings.portCount),
+          AIONDA_BROWSER_TOKEN: settings.token,
+        };
+        text = JSON.stringify(configuration, null, 2);
+      }
+      await navigator.clipboard.writeText(text.trim());
+      markCopied(button);
+      status.style.color = "#137333";
+      status.textContent = button.dataset.copyTarget === "mcp-config" ? "Configuration copied with the current host, ports and token. Save any changed settings here too." : "Command copied.";
+    } catch {
+      showError(new Error("Could not copy. Select the configuration or command and copy it manually."));
+    }
+  });
+}
+load().catch(showError);
+document.getElementById("save").addEventListener("click", () => persist().catch(showError));
+const toggleToken = document.getElementById("toggle-token");
+toggleToken.addEventListener("click", () => {
+  const visible = token.type === "password";
+  token.type = visible ? "text" : "password";
+  toggleToken.title = visible ? "Hide relay token" : "Show relay token";
+  toggleToken.setAttribute("aria-label", visible ? "Hide relay token" : "Show relay token");
+  toggleToken.setAttribute("aria-pressed", String(visible));
+});
+const copyToken = document.getElementById("copy-token");
+copyToken.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(token.value);
+    markCopied(copyToken);
+    status.style.color = "#137333";
+    status.textContent = "Token copied. Use it as AIONDA_BROWSER_TOKEN in your MCP server's environment.";
+  } catch {
+    showError(new Error("Could not copy. Click the eye icon and copy the token manually."));
+  }
+});
 async function load() {
   const settings = await chrome.storage.local.get(DEFAULTS);
   host.value = settings.host;
   port.value = settings.port;
+  portCount.value = settings.portCount;
   token.value = settings.token;
+  enabled.checked = settings.enabled === true;
+}
+function readSettings() {
+  const localHost = host.value.trim() || DEFAULTS.host;
+  const localPort = Number(port.value);
+  const localPortCount = Number(portCount.value);
+  if (!["127.0.0.1", "localhost"].includes(localHost)) throw new Error("Use 127.0.0.1 or localhost.");
+  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) throw new Error("Enter a port from 1 to 65535.");
+  if (!Number.isInteger(localPortCount) || localPortCount < 1 || localPortCount > 1024) throw new Error("Enter 1 to 1024 ports.");
+  if (!token.value.trim()) throw new Error("Enter the same token as your MCP server.");
+  return { host: localHost, port: localPort, portCount: localPortCount, token: token.value, enabled: enabled.checked };
+}
+async function persist() {
+  await chrome.storage.local.set(readSettings());
+  status.style.color = "#137333";
+  status.textContent = enabled.checked ? "Saved. Browser access enabled." : "Saved. Browser access disabled.";
+}
+function showError(error) {
+  status.style.color = "#b3261e";
+  status.textContent = error.message;
 }
 
-async function persist() {
-  await chrome.storage.local.set({
-    host: host.value.trim() || DEFAULTS.host,
-    port: Number(port.value) || DEFAULTS.port,
-    token: token.value || DEFAULTS.token,
-  });
-  status.textContent = "Saved";
-  setTimeout(() => {
-    status.textContent = "";
-  }, 1500);
+function markCopied(button) {
+  const label = button.dataset.copyLabel ?? button.getAttribute("aria-label");
+  button.dataset.copyLabel = label;
+  button.dataset.copied = "true";
+  button.setAttribute("aria-label", "Copied!");
+  button.title = "Copied!";
+  clearTimeout(copyResetTimers.get(button));
+  copyResetTimers.set(button, setTimeout(() => {
+    delete button.dataset.copied;
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  }, 2000));
 }

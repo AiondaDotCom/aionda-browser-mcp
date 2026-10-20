@@ -1,0 +1,15 @@
+{
+  "itemId": "ccmnmppfkbhimfcjlfacenpoceeamile",
+  "publisher": "Aionda GmbH",
+  "version": "0.2.1",
+  "submittedAt": "2026-10-03T11:13:00Z",
+  "statusAtSubmission": "Pending review",
+  "publishAutomaticallyAfterReview": true,
+  "visibility": "public",
+  "regions": "all",
+  "language": "English",
+  "price": "free",
+  "dashboardUrl": "https://chrome.google.com/webstore/devconsole/e9e716d2-132f-4447-8f40-a406a37a335c/ccmnmppfkbhimfcjlfacenpoceeamile/edit",
+  "privacyPolicyUrl": "https://aiondadotcom.github.io/aionda-browser-mcp/privacy.html",
+  "zipSha256": "f9623dd77f1e8502f61f8b40e25cabd587f76fa8a34dabfb37f22b6e6f5208a9"
+}

@@ -4,7 +4,7 @@ Guidance for Claude Code and Codex in this repository.
 
 ## Project Scope
 
-`aionda-browser-mcp` is a Chrome extension plus stdio MCP server for controlling a real user Chrome tab when Chrome DevTools Protocol is blocked or unreliable. The extension connects to the local relay at `ws://127.0.0.1:18792/relay`; MCP clients talk to `dist/server.js`.
+`aionda-browser-mcp` is a Chrome extension plus stdio MCP server for controlling a real user Chrome tab when Chrome DevTools Protocol is blocked or unreliable. Each MCP client starts its own `dist/server.js`, which binds the first free port of a pool (default `18792`–`18919`, `AIONDA_BROWSER_PORT`/`AIONDA_BROWSER_PORT_COUNT`). The extension connects to every server in the pool at `ws://127.0.0.1:<port>/relay`, so several AI agents can use Chrome at the same time.
 
 ## Development Commands
 
@@ -13,6 +13,7 @@ npm run check
 npm run build
 node --check extension/background.js
 node --check extension/content.js
+node --test tests/extension.test.mjs
 node dist/server.js
 ```
 
@@ -21,7 +22,11 @@ After changing extension files, reload the unpacked extension in Chrome. If the 
 ## Important Runtime Lessons
 
 - The toolbar badge can only stay `on` while an MCP relay process is running. If a direct test client starts `dist/server.js`, the extension may show `on` briefly and then go `off` when that process exits.
-- Do not add automatic port-kill behavior to the server. Starting a second test client must not kill the active Codex MCP server.
+- Do not add automatic port-kill behavior to the server. Starting a second test client must not kill the active Codex MCP server; it takes the next free pool port instead.
+- `EADDRINUSE` on 18792 no longer blocks startup. If every pool port is taken, the server exits with "All relay ports ... are in use".
+- The server exits when stdin closes or its parent process dies (checked every 5 seconds). Before this, an orphaned server (PPID 1) could hold 18792 for days and make Codex report `aionda-browser-mcp: failed (0 tools)`.
+- In the extension, each pool port is a session with its own attached tab (`sessions` in `background.js`). Sessions follow the active tab until `browser_attach` or `browser_open_tab` pins a tab. Screenshots, coordinate clicks, evaluation and uploads run through one `exclusive()` queue because they focus the tab or need the tab's single debugger slot.
+- A direct test client connects to the extension as an additional agent. While it runs, it follows the active tab like any other unpinned session.
 - The extension can attach normal `http(s)` tabs, but not `chrome://` pages. Use `browser_list_tabs` or `browser_attach` to recover when Chrome is focused on `chrome://extensions`.
 - On complex web apps, DOM snapshots may miss framework-rendered content. Prefer `browser_screenshot_fast` plus `browser_click_at` for visual workflows.
 - `browser_screenshot_fast` returns a downscaled image, while `browser_click_at` expects original viewport coordinates. Scale coordinates back to the captured viewport before clicking.
@@ -54,6 +59,7 @@ Expected core tools include:
 - `browser_status`
 - `browser_tab`
 - `browser_attach`
+- `browser_open_tab`
 - `browser_list_tabs`
 - `browser_snapshot`
 - `browser_snapshot_compact`
