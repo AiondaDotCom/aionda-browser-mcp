@@ -30,7 +30,7 @@ Use the copy icon inside the configuration block on the extension's Options page
   "mcpServers": {
     "aionda-browser": {
       "command": "npx",
-      "args": ["-y", "aionda-browser-mcp@0.3.0"]
+      "args": ["-y", "aionda-browser-mcp@0.3.1"]
     }
   }
 }
@@ -38,14 +38,14 @@ Use the copy icon inside the configuration block on the extension's Options page
 
 Restart the MCP client. It downloads the npm package and starts the server automatically. The first launch requires an internet connection.
 
-On Windows, clients that cannot launch `npx` directly can use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "aionda-browser-mcp@0.3.0"]`.
+On Windows, clients that cannot launch `npx` directly can use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "aionda-browser-mcp@0.3.1"]`.
 
 #### Global installation
 
 If you prefer to install the server explicitly, use **Copy command** on the Options page or run:
 
 ```sh
-npm install --global aionda-browser-mcp@0.3.0
+npm install --global aionda-browser-mcp@0.3.1
 ```
 
 Then configure your MCP client with `"command": "aionda-browser-mcp"` and `"args": []`. If your desktop client cannot find the command, use its absolute path (`command -v aionda-browser-mcp` on macOS/Linux or `where aionda-browser-mcp` on Windows).
@@ -82,7 +82,7 @@ Use the **eye icon** beside the relay token to reveal or conceal it, and the **c
   "mcpServers": {
     "aionda-browser": {
       "command": "npx",
-      "args": ["-y", "aionda-browser-mcp@0.3.0"],
+      "args": ["-y", "aionda-browser-mcp@0.3.1"],
       "env": {
         "AIONDA_BROWSER_PORT": "18792",
         "AIONDA_BROWSER_TOKEN": "REPLACE_WITH_YOUR_OWN_RANDOM_TOKEN"
@@ -197,3 +197,11 @@ When upgrading from a relay embedded in an older MCP process, stop the old relay
 extension from this installation for full parallel execution. Older store extensions
 remain usable with serialized commands. Old MCP processes also need to reconnect or
 restart. The server never kills a process occupying the relay port automatically.
+
+### Protected Chrome pages
+
+`attached` means the tab is selected. Check `contentScriptAvailable` and
+`restriction` before attempting automation. Chrome Web Store pages block
+content scripts and extension debugger operations. If a screenshot reports an
+`activeTab` error, click the Aionda Browser MCP toolbar icon on that tab and retry.
+That gesture enables screenshots but does not enable scripting on protected pages.

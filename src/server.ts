@@ -34,7 +34,7 @@ const sendCommand = (command: string, payload: JsonValue, timeoutMs = options.ti
 
 const browserServer = new McpServer({
   name: "aionda-browser-mcp",
-  version: "0.3.0",
+  version: "0.3.1",
 });
 
 browserServer.tool("browser_status", "Return relay and attached-tab status.", {}, async () => {

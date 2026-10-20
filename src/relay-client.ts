@@ -24,6 +24,7 @@ export class RelayClient {
         status.tab = await this.rpc("tab", { tabId: this.tabId }, timeoutMs);
         status.relay.attached = status.tab.attached === true;
       }
+      status.tab = describeTabAccess(status.tab);
       return status;
     }
     if (!["attach", "openTab", "listTabs", "reloadExtension"].includes(command) && this.tabId === undefined && !this.followActive) {
@@ -36,7 +37,7 @@ export class RelayClient {
       this.followActive = command === "attach" && (payload as {followActive?: boolean}).followActive === true;
       this.tabId = this.followActive ? undefined : result.tabId;
     }
-    return result;
+    return ["attach", "openTab", "tab", "navigate"].includes(command) ? describeTabAccess(result) : result;
   }
 
   private async rpc(command: string, payload: unknown, timeoutMs: number): Promise<any> {
@@ -136,8 +137,33 @@ export class RelayClient {
         }
         if (typeof message.id !== "string" || !message.response) return;
         this.finish(message.id, message.response.result,
-          message.response.ok ? undefined : new Error(message.response.error));
+          message.response.ok ? undefined : new Error(explainBrowserError(message.response.error)));
       });
     });
   }
+}
+
+// Add actionable diagnostics even when the installed Store extension predates them.
+export function describeTabAccess(tab: any) {
+  if (!tab || typeof tab !== "object") return tab;
+  let protectedPage = false;
+  try {
+    const url = new URL(tab.url);
+    protectedPage = url.hostname === "chromewebstore.google.com" ||
+      (url.hostname === "chrome.google.com" && /^\/webstore(?:\/|$)/.test(url.pathname));
+  } catch { /* No tab URL yet. */ }
+  const restriction = protectedPage ? explainBrowserError("The extensions gallery cannot be scripted.") : tab.restriction || tab.error;
+  return { ...tab, contentScriptAvailable: tab.attached === true && !restriction,
+    ...(restriction ? { restriction } : {}),
+    ...(protectedPage ? { screenshotHint: "If capture reports an activeTab error, click the extension toolbar icon on this tab and retry." } : {}) };
+}
+
+export function explainBrowserError(message: string): string {
+  if (/extensions gallery cannot be scripted/i.test(message)) {
+    return "Chrome blocks extension scripting and debugger actions on Chrome Web Store pages, including the developer dashboard. Snapshots, clicks, typing, evaluation and uploads are unavailable there. Use the dashboard manually; navigation and tab listing still work. A screenshot requires clicking the Aionda Browser MCP toolbar icon on that tab first.";
+  }
+  if (/activeTab.*(?:permission|invoked)|permission.*activeTab/i.test(message)) {
+    return "Chrome requires a user gesture to capture this protected page. Click the Aionda Browser MCP toolbar icon on this tab, then retry the screenshot. This does not unlock scripting or debugger actions on Chrome Web Store pages.";
+  }
+  return message;
 }

@@ -380,7 +380,11 @@ async function runCommand(session, command, payload) {
     if (result && result.ok === false) return result;
     return ok(result ?? null);
   } catch (error) {
-    return fail(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    if (/activeTab.*(?:permission|invoked)|permission.*activeTab/i.test(message)) {
+      return fail("Chrome requires a user gesture to capture this protected page. Click the Aionda Browser MCP toolbar icon on this tab, then retry the screenshot. This does not grant content-script access to Chrome Web Store pages.");
+    }
+    return fail(message);
   }
 }
 
@@ -669,7 +673,10 @@ function sleep(ms) {
 }
 
 function tabToState(tab, attached, error) {
+  const restriction = tabAccessRestriction(tab.url) || error;
   return {
+    contentScriptAvailable: attached && !restriction,
+    ...(restriction ? { restriction } : {}),
     tabId: tab.id,
     url: tab.url,
     title: tab.title,
@@ -677,6 +684,17 @@ function tabToState(tab, attached, error) {
     version: chrome.runtime.getManifest().version,
     error,
   };
+}
+
+function tabAccessRestriction(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === "chromewebstore.google.com" ||
+        (parsed.hostname === "chrome.google.com" && /^\/webstore(?:\/|$)/.test(parsed.pathname))) {
+      return "Chrome blocks extension scripting on this Chrome Web Store page. The tab is selected, but content-script tools are unavailable. If a screenshot reports an activeTab error, click the Aionda Browser MCP toolbar icon on this tab and retry it.";
+    }
+  } catch { /* No valid tab URL yet. */ }
+  return null;
 }
 
 function isScriptableUrl(url) {

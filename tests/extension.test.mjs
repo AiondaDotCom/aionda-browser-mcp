@@ -172,3 +172,19 @@ test('shared relay queues same-tab operations while allowing other tabs', async 
   assert.equal(vm.runInContext('overlap',h.context),false);
   assert.equal(vm.runInContext('parallel',h.context),true);
 });
+
+test('restricted tab status distinguishes selection from content-script access',()=>{
+ const h=harness();
+ const state=vm.runInContext('tabToState',h.context)({id:7,url:'https://chrome.google.com/webstore/devconsole/publisher'},true);
+ assert.equal(state.attached,true);
+ assert.equal(state.tabId,7);
+ assert.equal(state.contentScriptAvailable,false);
+ assert.match(state.restriction,/toolbar icon/);
+});
+test('screenshot permission failures explain the toolbar gesture',async()=>{
+ const h=harness();
+ vm.runInContext(`lastSettings.enabled=true; captureTab=async()=>{throw new Error("The 'activeTab' permission is not in effect because this extension has not been in invoked.")}`,h.context);
+ const result=await vm.runInContext('runCommand',h.context)({attachedTabId:1},'screenshot',{});
+ assert.equal(result.ok,false);
+ assert.match(result.error,/toolbar icon/);
+});
