@@ -21,7 +21,7 @@ let settingsGeneration = 0;
 let scanTimer = null;
 let scanTick = 0;
 let lastSettings = { ...DEFAULTS };
-let exclusiveQueue = Promise.resolve();
+const locks = new Map();
 
 const RECONNECT_ALARM = "aionda-browser-mcp-reconnect";
 
@@ -48,10 +48,10 @@ chrome.action.onClicked.addListener(async (tab) => {
   if (!enabled) return chrome.runtime.openOptionsPage();
   const open = openSessions();
   if (open.length === 0) return connect();
-  // Agents that picked their own tab keep it, unless every agent did.
+  // Agents that claimed a tab keep it: moving them all to one tab would make
+  // them work in the same tab.
   const following = open.filter((session) => !session.pinned);
-  if (following.length) await Promise.all(following.map((session) => attachTab(session, tab, { follow: true })));
-  else await Promise.all(open.map((session) => attachTab(session, tab)));
+  await Promise.all(following.map((session) => attachTab(session, tab, { follow: true })));
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -90,6 +90,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   for (const session of sessions.values()) {
     if (tabId !== session.attachedTabId) continue;
+    if (session.pinned) session.closedTab = { id: tabId, url: session.attachedTab?.url || "" };
     session.attachedTabId = null;
     session.attachedTab = {};
     session.pinned = false;
@@ -212,12 +213,29 @@ async function attachActiveTab(session) {
   await attachTab(session, tab, { follow: true });
 }
 
-async function findAttachableTab(urlContains) {
+// Prefers tabs no other agent claimed, so two agents on the same website get
+// different tabs. A match claimed by another agent is returned only when no
+// free one exists, so the caller can explain the conflict.
+async function findAttachableTab(session, urlContains, payload = {}) {
   const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] });
   const tabs = windows.flatMap((window) => window.tabs || []);
   const needle = typeof urlContains === "string" ? urlContains : "";
   const matches = tabs.filter((tab) => isScriptableUrl(tab.url) && (!needle || (tab.url || "").includes(needle)));
-  return matches.find((tab) => tab.active) || matches[0] || null;
+  const free = matches.filter((tab) => !claimedByOtherAgent(session, tab.id, payload));
+  return free.find((tab) => tab.active) || free[0] || matches[0] || null;
+}
+
+// Shared-relay clients all use one socket, so the relay passes the tabs other
+// clients claimed. Port-pool sessions are compared with each other.
+function claimedByOtherAgent(session, tabId, payload = {}) {
+  if (payload._sharedClient) return Array.isArray(payload._claimedTabIds) && payload._claimedTabIds.includes(tabId);
+  return openSessions().some((other) => other !== session && other.pinned && other.attachedTabId === tabId);
+}
+
+function noAttachableTabMessage(payload) {
+  if (typeof payload.tabId === "number") return `Tab ${payload.tabId} does not exist. Call browser_list_tabs for current tab ids, or browser_open_tab with {url}.`;
+  if (payload.urlContains) return `No http(s) tab matching "${payload.urlContains}" found. Call browser_open_tab with {url} to open one.`;
+  return "No http(s) tab found. Call browser_open_tab with {url} to open one.";
 }
 
 async function listVisibleTabs(session) {
@@ -230,7 +248,7 @@ async function listVisibleTabs(session) {
     url: tab.url || "",
     scriptable: isScriptableUrl(tab.url),
     attachedHere: tab.id === session.attachedTabId,
-    otherAgents: openSessions().filter((other) => other !== session && other.attachedTabId === tab.id).length,
+    otherAgents: openSessions().filter((other) => other !== session && other.pinned && other.attachedTabId === tab.id).length,
   })));
 }
 
@@ -307,21 +325,27 @@ async function runCommand(session, command, payload) {
         return ok(stateOf(session));
       }
       const tab = typeof payload.tabId === "number"
-        ? await chrome.tabs.get(payload.tabId)
-        : await findAttachableTab(payload.urlContains);
-      if (!tab) throw new Error(payload.urlContains ? `No scriptable tab matching "${payload.urlContains}" found.` : "No scriptable tab found.");
+        ? await chrome.tabs.get(payload.tabId).catch(() => null)
+        : await findAttachableTab(session, payload.urlContains, payload);
+      if (!tab) throw new Error(noAttachableTabMessage(payload));
       if (!isScriptableUrl(tab.url)) throw new Error(unsupportedUrlMessage(tab.url));
+      if (claimedByOtherAgent(session, tab.id, payload)) {
+        throw new Error(`Tab ${tab.id} (${tab.url}) is already claimed by another AI agent. ` +
+          "Do not share tabs: call browser_open_tab with {url} to open your own tab, even for the same website, or pick a tab with otherAgents: 0 from browser_list_tabs.");
+      }
       session.pinned = true;
+      session.closedTab = null;
       await attachTab(session, tab);
       return ok(stateOf(session));
     }
 
     if (command === "openTab") {
-      const tab = await exclusive(async () => payload.newWindow === true
+      const tab = await exclusive(["focus"], async () => payload.newWindow === true
         ? (await chrome.windows.create({ url: payload.url, focused: payload.active !== false })).tabs?.[0]
         : await chrome.tabs.create({ url: payload.url, active: payload.active !== false }));
       if (!tab?.id) throw new Error("Chrome did not create a tab.");
       session.pinned = true;
+      session.closedTab = null;
       session.attachedTabId = tab.id;
       session.attachedTab = tabToState({ ...tab, url: tab.url || tab.pendingUrl || payload.url }, true);
       sendState(session);
@@ -333,8 +357,10 @@ async function runCommand(session, command, payload) {
       return ok(await listVisibleTabs(session));
     }
 
-    const tabId = session.attachedTabId;
-    if (!tabId) throw new Error("No tab is attached. Click the extension icon on the target tab, or use browser_attach or browser_open_tab.");
+    // Several agents share this browser, so page tools only run in a tab the
+    // agent claimed. Following the active tab could hit another agent's tab.
+    const tabId = session.pinned ? session.attachedTabId : null;
+    if (!tabId) throw new Error(unclaimedTabMessage(session));
 
     if (command === "tab") {
       return ok(tabToState(await chrome.tabs.get(tabId), true));
@@ -348,7 +374,7 @@ async function runCommand(session, command, payload) {
     }
 
     if (command === "screenshot") {
-      return ok(await exclusive(() => captureTab(tabId, { format: "png" })));
+      return ok(await exclusive(focusLock(tabId), () => captureTab(tabId, { format: "png" })));
     }
 
     if (command === "screenshotFast") {
@@ -360,19 +386,19 @@ async function runCommand(session, command, payload) {
         grayscale: payload.grayscale === true,
         maxBytes: clampNumber(payload.maxBytes, 0, 2000000, 0),
       };
-      return ok(await exclusive(() => captureTab(tabId, options)));
+      return ok(await exclusive(focusLock(tabId), () => captureTab(tabId, options)));
     }
 
     if (command === "clickAt") {
-      return ok(await exclusive(() => dispatchMouseClick(tabId, payload)));
+      return ok(await exclusive(focusLock(tabId), () => dispatchMouseClick(tabId, payload)));
     }
 
     if (command === "uploadFiles") {
-      return ok(await exclusive(() => uploadFiles(tabId, payload)));
+      return ok(await exclusive(tabLock(tabId), () => uploadFiles(tabId, payload)));
     }
 
     if (command === "evaluate") {
-      return ok(await exclusive(() => evaluateInTab(tabId, payload.code)));
+      return ok(await exclusive(tabLock(tabId), () => evaluateInTab(tabId, payload.code)));
     }
 
     await ensureContentScript(tabId);
@@ -388,11 +414,28 @@ async function runCommand(session, command, payload) {
   }
 }
 
-// Screenshots and coordinate clicks focus their tab first, and Chrome allows a
-// single debugger per tab. Run these one at a time so agents do not interleave.
-function exclusive(task) {
-  const run = exclusiveQueue.then(task, task);
-  exclusiveQueue = run.catch(() => {});
+// Screenshots and coordinate clicks bring their tab to the front, so they run
+// one at a time across all agents (focusLock). Chrome allows a single debugger
+// per tab, so evaluation and uploads only wait for other work on the same tab
+// (tabLock) and run in parallel with other agents' tabs.
+function focusLock(tabId) {
+  return ["focus", ...tabLock(tabId)];
+}
+
+function tabLock(tabId) {
+  return [`tab:${tabId}`];
+}
+
+// Runs task after every earlier task holding one of keys. The predecessors are
+// read synchronously, so tasks with overlapping keys cannot deadlock.
+function exclusive(keys, task) {
+  const previous = keys.map((key) => locks.get(key) || Promise.resolve());
+  const run = Promise.all(previous).then(() => task());
+  const done = run.catch(() => {});
+  for (const key of keys) locks.set(key, done);
+  done.then(() => {
+    for (const key of keys) if (locks.get(key) === done) locks.delete(key);
+  });
   return run;
 }
 
@@ -709,6 +752,14 @@ function isScriptableUrl(url) {
 
 function unsupportedUrlMessage(url) {
   return `Cannot attach to this URL. Chrome extensions cannot inject content scripts into ${url || "this tab"}. Open a normal http(s) page and click the extension icon there.`;
+}
+
+function unclaimedTabMessage(session) {
+  const closed = session.closedTab
+    ? `Your tab ${session.closedTab.id}${session.closedTab.url ? ` (${session.closedTab.url})` : ""} was closed. `
+    : "";
+  return `${closed}No tab claimed by this agent. Other AI agents may use this browser at the same time, so page tools only run in a tab the agent claimed first. ` +
+    "Fix: call browser_open_tab with {url} to open your own tab, or call browser_list_tabs and then browser_attach with {tabId} to claim an existing tab. Then retry this command.";
 }
 
 function stateOf(session) {

@@ -60,16 +60,19 @@ In the extension's **Options** page:
 2. Read the browser-access disclosure.
 3. Check **Enable browser access** and click **Save settings**.
 4. Open a normal HTTP or HTTPS website. The badge shows **on** when a tab is attached to the running relay.
-5. Ask your assistant to call `browser_status`, then `browser_snapshot_compact`.
+5. Ask your assistant to call `browser_open_tab` (or `browser_attach`), then `browser_snapshot_compact`.
 
-While enabled, the extension follows the active tab. An MCP client can also select a tab with `browser_attach` or open its own with `browser_open_tab`. To stop access, uncheck **Enable browser access** and save, or disable the extension.
+Every MCP client must first claim a tab: open its own with `browser_open_tab` or take an existing one with `browser_attach`. Page tools return an error that explains this until a tab is claimed. To stop access, uncheck **Enable browser access** and save, or disable the extension.
 
 ### Several AI agents at once
 
 Each MCP client has a separate stdio connection and shares one independent relay.
-Use `browser_attach(tabId)` or `browser_open_tab` to pin a tab to that client.
-Normal commands for different tabs can run concurrently; operations for the same
-tab and focus-sensitive operations are queued. Older extensions (before 0.3)
+Each client must claim a tab with `browser_open_tab` or `browser_attach(tabId)`
+before page tools work, and a tab belongs to one client: `browser_attach` refuses
+tabs claimed by another client. Two agents can therefore work on the same website
+(for example two emails on outlook.com) in two tabs. The server sends these rules
+to MCP clients as server instructions. Normal commands for different tabs run
+concurrently; operations for the same tab and focus-sensitive operations are queued. Older extensions (before 0.3)
 are supported through a serialized select-tab-and-command compatibility path.
 See [Multiple agents and macOS service](#multiple-agents-and-macos-service).
 
@@ -125,7 +128,8 @@ Prefer `browser_snapshot_compact` for smaller text results and `browser_screensh
 
 - **Badge off / extension disconnected:** Start or restart your MCP client, enable browser access, and check that the host, port and token match. Check Chrome's site-access setting for the extension.
 - **Incompatible relay on the port:** Stop the old relay once when upgrading. The server never stops another process automatically.
-- **Agents switch each other's tab:** Agents that follow the active tab move along when another agent brings its tab to the front. Use `browser_open_tab` or `browser_attach` to give each agent its own tab.
+- **"No tab claimed by this agent":** Expected before the first `browser_open_tab` or `browser_attach`, and after the agent's tab was closed. Claim a tab and retry.
+- **"already claimed by another AI agent":** Open a separate tab with `browser_open_tab`, even for the same website.
 - **No tab attached:** Open a normal website and click the toolbar icon. Chrome restricts internal pages, the Web Store and some managed pages.
 - **Node or npx not found:** Restart your desktop client after installing Node.js or use an absolute command path.
 - **Debugger action fails:** Chrome may show a debugging banner. Another debugger or an enterprise policy can prevent coordinate clicks, uploads and evaluation.
@@ -184,14 +188,17 @@ launchctl bootout gui/$(id -u)/com.aionda.browser-relay
 rm ~/Library/LaunchAgents/com.aionda.browser-relay.plist
 ```
 
-Each agent should call `browser_list_tabs`, then `browser_attach` with a `tabId`
-(or `urlContains`). Its tab selection is pinned to that MCP connection; changing
-the active Chrome tab or another agent's selection does not change it. Commands
+Each agent must call `browser_open_tab`, or `browser_list_tabs` and then
+`browser_attach` with a `tabId` (or `urlContains`), before page tools work. Its tab
+is pinned to that MCP connection; changing the active Chrome tab or another
+agent's selection does not change it. The relay refuses a tab another connection
+claimed, `urlContains` prefers unclaimed tabs, and `browser_list_tabs` reports
+claimed tabs as `otherAgents: 1`. If an agent's tab is closed, its next page tool
+says so and asks it to claim a new tab. Commands
 for the same tab are queued. Different tabs can run concurrently; screenshots
 and coordinate clicks are serialized globally because they change Chrome focus.
 Multiple agents sharing one MCP connection also share its tab selection: give
-each agent its own MCP connection for independent tabs. Agents editing the same
-tab still need to coordinate multi-step workflows and snapshot references.
+each agent its own MCP connection for independent tabs.
 
 When upgrading from a relay embedded in an older MCP process, stop the old relay once and reload the unpacked Chrome
 extension from this installation for full parallel execution. Older store extensions

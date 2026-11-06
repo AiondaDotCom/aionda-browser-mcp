@@ -12,6 +12,8 @@ function harness() {
     { id: 2, windowId: 1, active: false, url: 'https://two.example/', title: 'Two' },
   ];
   const sockets = [];
+  const listeners = {};
+  const event = (name) => ({ addListener(fn) { listeners[name] = fn; } });
   const listener = { addListener() {} };
   class Socket {
     static OPEN = 1;
@@ -26,8 +28,13 @@ function harness() {
     action: { onClicked: listener, setBadgeText() {}, setBadgeBackgroundColor() {}, setTitle() {} },
     alarms: { onAlarm: listener, create() {} },
     tabs: {
-      onUpdated: listener, onActivated: listener, onRemoved: listener,
-      get: async (id) => tabs.find((tab) => tab.id === id),
+      onUpdated: listener, onActivated: listener, onRemoved: event('tabs.onRemoved'),
+      get: async (id) => {
+        const tab = tabs.find((candidate) => candidate.id === id);
+        if (!tab) throw new Error(`No tab with id: ${id}.`);
+        return tab;
+      },
+      update: async (id, props) => Object.assign(tabs.find((tab) => tab.id === id), props),
       sendMessage: async () => ({ ok: true }),
     },
     windows: { getAll: async () => [{ tabs }] },
@@ -44,7 +51,7 @@ function harness() {
   };
   const context = vm.createContext({ chrome, WebSocket: Socket, URL, console, clearTimeout() {}, setTimeout() {} });
   vm.runInContext(source, context);
-  return { context, settings, calls, sockets, chrome };
+  return { context, settings, calls, sockets, chrome, tabs, listeners };
 }
 
 test('connection is opt-in and disabling closes the socket', async () => {
@@ -184,7 +191,91 @@ test('restricted tab status distinguishes selection from content-script access',
 test('screenshot permission failures explain the toolbar gesture',async()=>{
  const h=harness();
  vm.runInContext(`lastSettings.enabled=true; captureTab=async()=>{throw new Error("The 'activeTab' permission is not in effect because this extension has not been in invoked.")}`,h.context);
- const result=await vm.runInContext('runCommand',h.context)({attachedTabId:1},'screenshot',{});
+ const result=await vm.runInContext('runCommand',h.context)({attachedTabId:1,pinned:true},'screenshot',{});
  assert.equal(result.ok,false);
  assert.match(result.error,/toolbar icon/);
+});
+
+async function twoAgents(h) {
+  h.settings.enabled = true;
+  await vm.runInContext('connect()', h.context);
+  h.sockets[0].open();
+  h.sockets[1].open();
+  await new Promise(resolve => setImmediate(resolve));
+  return [vm.runInContext('[sessions.get(18792), sessions.get(18793)]', h.context), vm.runInContext('runCommand', h.context)];
+}
+
+test('page tools require a claimed tab with an actionable error', async () => {
+  const h = harness();
+  const [[a], runCommand] = await twoAgents(h);
+  assert.equal(a.attachedTabId, 1);
+  for (const command of ['snapshot', 'navigate', 'screenshotFast', 'clickAt', 'evaluate']) {
+    const result = await runCommand(a, command, { url: 'https://x.example/' });
+    assert.equal(result.ok, false, command);
+    assert.match(result.error, /No tab claimed by this agent/);
+    assert.match(result.error, /browser_open_tab/);
+    assert.match(result.error, /browser_attach/);
+  }
+  assert.equal((await runCommand(a, 'listTabs', {})).ok, true);
+  assert.equal((await runCommand(a, 'attach', { tabId: 1 })).ok, true);
+  const navigated = await runCommand(a, 'navigate', { url: 'https://x.example/' });
+  assert.equal(navigated.ok, true);
+  assert.equal(h.tabs[0].url, 'https://x.example/');
+  const released = await runCommand(a, 'attach', { followActive: true });
+  assert.equal(released.result.followsActiveTab, true);
+  assert.match((await runCommand(a, 'snapshot', {})).error, /No tab claimed/);
+});
+
+test('two agents on the same website get different tabs', async () => {
+  const h = harness();
+  h.tabs[1].url = 'https://outlook.live.com/mail/1';
+  h.tabs.push({ id: 3, windowId: 1, active: false, url: 'https://outlook.live.com/mail/2', title: 'Mail 2' });
+  const [[a, b], runCommand] = await twoAgents(h);
+  const first = await runCommand(a, 'attach', { urlContains: 'outlook' });
+  const second = await runCommand(b, 'attach', { urlContains: 'outlook' });
+  assert.equal(first.result.tabId, 2);
+  assert.equal(second.result.tabId, 3);
+  const taken = await runCommand(b, 'attach', { tabId: 2 });
+  assert.equal(taken.ok, false);
+  assert.match(taken.error, /already claimed by another AI agent/);
+  assert.equal(b.attachedTabId, 3);
+  const listed = await runCommand(b, 'listTabs', {});
+  assert.deepEqual(listed.result.map((tab) => [tab.id, tab.attachedHere, tab.otherAgents]), [[1, false, 0], [2, false, 1], [3, true, 0]]);
+});
+
+test('a closed tab is reported and must be claimed again', async () => {
+  const h = harness();
+  const [[a], runCommand] = await twoAgents(h);
+  await runCommand(a, 'attach', { tabId: 2 });
+  h.tabs.splice(1, 1);
+  h.listeners['tabs.onRemoved'](2);
+  const result = await runCommand(a, 'snapshot', {});
+  assert.match(result.error, /^Your tab 2 \(https:\/\/two\.example\/\) was closed\. No tab claimed/);
+  const missing = await runCommand(a, 'attach', { tabId: 2 });
+  assert.match(missing.error, /Tab 2 does not exist/);
+});
+
+test('debugger work on different tabs runs in parallel, focus work one at a time', async () => {
+  const h = harness();
+  const exclusive = vm.runInContext('exclusive', h.context);
+  const focusLock = vm.runInContext('focusLock', h.context);
+  const tabLock = vm.runInContext('tabLock', h.context);
+  const events = [];
+  const task = (name) => async () => {
+    events.push(`start ${name}`);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    events.push(`end ${name}`);
+  };
+  await Promise.all([exclusive(tabLock(1), task('eval1')), exclusive(tabLock(2), task('eval2'))]);
+  assert.deepEqual(events.slice(0, 2), ['start eval1', 'start eval2']);
+  events.length = 0;
+  await Promise.all([exclusive(focusLock(1), task('shot1')), exclusive(focusLock(2), task('shot2'))]);
+  assert.deepEqual(events, ['start shot1', 'end shot1', 'start shot2', 'end shot2']);
+  events.length = 0;
+  await Promise.all([exclusive(focusLock(1), task('shot1')), exclusive(tabLock(1), task('eval1')), exclusive(tabLock(2), task('eval2'))]);
+  assert.deepEqual(events.slice(0, 2), ['start shot1', 'start eval2']);
+  assert.ok(events.indexOf('start eval1') > events.indexOf('end shot1'));
+  await assert.rejects(exclusive(tabLock(1), async () => { throw new Error('boom'); }), /boom/);
+  await exclusive(tabLock(1), task('after error'));
+  assert.equal(vm.runInContext('locks.size', h.context), 0);
 });

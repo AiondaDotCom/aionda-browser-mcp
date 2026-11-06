@@ -41,6 +41,8 @@ const pendingRequests = new Map<string, PendingRequest>();
 let extensionSocket: WebSocket | null = null;
 let extensionState: ExtensionState = {};
 let connectedAt: string | null = null;
+// Which MCP client claimed which tab. A tab belongs to one client at a time.
+const tabOwners = new Map<number, WebSocket>();
 
 export function startRelayServer({ host, port, token }: ServerOptions): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -71,7 +73,10 @@ export function startRelayServer({ host, port, token }: ServerOptions): Promise<
       if (url.searchParams.get("role") === "client") {
         clients.add(socket);
         socket.send(JSON.stringify({ type: "hello", protocol: "aionda-relay-v1" }));
-        socket.on("close", () => clients.delete(socket));
+        socket.on("close", () => {
+          clients.delete(socket);
+          releaseTabs(socket);
+        });
         socket.on("message", async (raw) => {
           let request;
           try { request = JSON.parse(raw.toString()); } catch { return; }
@@ -82,7 +87,7 @@ export function startRelayServer({ host, port, token }: ServerOptions): Promise<
             const result = request.command === "status"
               ? { relay: { host, port, connected: isExtensionConnected(), connectedAt,
                   attached: extensionState.attached === true }, tab: extensionState }
-              : await dispatchCommand(request.command, request.payload ?? {}, request.timeoutMs);
+              : await dispatchClientCommand(socket, request.command, request.payload ?? {}, request.timeoutMs);
             response = { ok: true, result: result as JsonValue };
           } catch (error) {
             response = { ok: false, error: String(error instanceof Error ? error.message : error) };
@@ -148,6 +153,53 @@ function handleRelayMessage(raw: string) {
 
   if (response.response.ok) pending.resolve(response.response.result);
   else pending.reject(new Error(response.response.error));
+}
+
+function releaseTabs(client: WebSocket) {
+  for (const [tabId, owner] of tabOwners) if (owner === client) tabOwners.delete(tabId);
+}
+
+function claimedByOthers(client: WebSocket): number[] {
+  return [...tabOwners].filter(([, owner]) => owner !== client).map(([tabId]) => tabId);
+}
+
+export function claimedTabMessage(tabId: number, url?: string) {
+  return `Tab ${tabId}${url ? ` (${url})` : ""} is already claimed by another AI agent. ` +
+    "Do not share tabs: call browser_open_tab with {url} to open your own tab, even for the same website, or pick a tab with otherAgents: 0 from browser_list_tabs.";
+}
+
+// Enforces one client per tab on top of the extension, so the rule also holds
+// for extension versions that do not know other clients' tabs.
+async function dispatchClientCommand(client: WebSocket, command: string, payload: JsonValue, timeoutMs: number): Promise<JsonValue> {
+  const input = (payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {}) as Record<string, JsonValue>;
+  if (command === "attach" && input.followActive === true) {
+    releaseTabs(client);
+    return dispatchCommand(command, input, timeoutMs);
+  }
+  if (command === "attach" || command === "openTab") {
+    if (command === "attach" && typeof input.tabId === "number") {
+      const owner = tabOwners.get(input.tabId);
+      if (owner && owner !== client) throw new Error(claimedTabMessage(input.tabId));
+    }
+    const result = await dispatchCommand(command, { ...input, _claimedTabIds: claimedByOthers(client) }, timeoutMs);
+    const tab = result && typeof result === "object" && !Array.isArray(result) ? result : {};
+    if (tab.attached === true && typeof tab.tabId === "number") {
+      const owner = tabOwners.get(tab.tabId);
+      if (owner && owner !== client) throw new Error(claimedTabMessage(tab.tabId, typeof tab.url === "string" ? tab.url : undefined));
+      releaseTabs(client);
+      tabOwners.set(tab.tabId, client);
+    }
+    return result;
+  }
+  const result = await dispatchCommand(command, input, timeoutMs);
+  if (command === "listTabs" && Array.isArray(result)) {
+    return result.map((tab) => {
+      if (!tab || typeof tab !== "object" || Array.isArray(tab) || typeof tab.id !== "number") return tab;
+      const owner = tabOwners.get(tab.id);
+      return { ...tab, attachedHere: owner === client, otherAgents: owner && owner !== client ? 1 : 0 };
+    });
+  }
+  return result;
 }
 
 let legacyQueue: Promise<unknown> = Promise.resolve();

@@ -12,8 +12,6 @@ export class RelayClient {
   private pending = new Map<string, Pending>();
   private closed = false;
   private tabId?: number;
-  private followActive = false;
-  private selection?: Promise<any>;
 
   constructor(private options: Options) {}
 
@@ -21,23 +19,40 @@ export class RelayClient {
     if (command === "status") {
       const status = await this.rpc(command, payload, timeoutMs);
       if (this.tabId !== undefined) {
-        status.tab = await this.rpc("tab", { tabId: this.tabId }, timeoutMs);
+        status.tab = await this.rpc("tab", { tabId: this.tabId }, timeoutMs).catch((error) => this.lostTab(error));
         status.relay.attached = status.tab.attached === true;
+      } else {
+        status.tab = { attached: false, claimed: false, error: unclaimedTabMessage() };
+        status.relay.attached = false;
       }
       status.tab = describeTabAccess(status.tab);
       return status;
     }
-    if (!["attach", "openTab", "listTabs", "reloadExtension"].includes(command) && this.tabId === undefined && !this.followActive) {
-      this.selection ??= this.request("attach", {}, timeoutMs).finally(() => { this.selection = undefined; });
-      await this.selection;
+    const claiming = ["attach", "openTab"].includes(command);
+    // Several agents share the browser, so page tools only run in a tab this
+    // client claimed. Following the active tab could hit another agent's tab.
+    if (!claiming && !CLAIM_FREE_COMMANDS.has(command) && this.tabId === undefined) {
+      throw new Error(unclaimedTabMessage());
     }
+    if (command === "attach" && (payload as { followActive?: boolean }).followActive === true) this.tabId = undefined;
     const result = await this.rpc(command,
-      ["attach", "openTab"].includes(command) || this.tabId === undefined ? payload : { ...(payload as object), tabId: this.tabId }, timeoutMs);
-    if (["attach", "openTab"].includes(command) && result?.attached && Number.isInteger(result.tabId)) {
-      this.followActive = command === "attach" && (payload as {followActive?: boolean}).followActive === true;
-      this.tabId = this.followActive ? undefined : result.tabId;
+      claiming || this.tabId === undefined ? payload : { ...(payload as object), tabId: this.tabId }, timeoutMs)
+      .catch((error) => { throw claiming || this.tabId === undefined ? error : this.lostTab(error); });
+    if (claiming && result?.attached && Number.isInteger(result.tabId)) {
+      const released = command === "attach" && (payload as { followActive?: boolean }).followActive === true;
+      this.tabId = released ? undefined : result.tabId;
+      if (released) return { ...describeTabAccess(result), claimed: false, note: "Tab released. Claim a tab before using page tools again." };
     }
     return ["attach", "openTab", "tab", "navigate"].includes(command) ? describeTabAccess(result) : result;
+  }
+
+  // Chrome reports "No tab with id" once the claimed tab is closed. Forget the
+  // tab so the agent gets a clear instruction instead of a Chrome error.
+  private lostTab(error: Error): Error {
+    if (this.tabId === undefined || !/No tab with id/i.test(error.message)) return error;
+    const tabId = this.tabId;
+    this.tabId = undefined;
+    return new Error(`Your tab ${tabId} was closed. ${unclaimedTabMessage()}`);
   }
 
   private async rpc(command: string, payload: unknown, timeoutMs: number): Promise<any> {
@@ -141,6 +156,13 @@ export class RelayClient {
       });
     });
   }
+}
+
+const CLAIM_FREE_COMMANDS = new Set(["listTabs", "reloadExtension"]);
+
+export function unclaimedTabMessage() {
+  return "No tab claimed by this agent. Other AI agents may use this browser at the same time, so page tools only run in a tab the agent claimed first. " +
+    "Fix: call browser_open_tab with {url} to open your own tab, or call browser_list_tabs and then browser_attach with {tabId} to claim an existing tab. Then retry this command.";
 }
 
 // Add actionable diagnostics even when the installed Store extension predates them.

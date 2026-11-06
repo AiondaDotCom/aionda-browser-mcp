@@ -32,10 +32,22 @@ const relay = new RelayClient(options);
 const sendCommand = (command: string, payload: JsonValue, timeoutMs = options.timeoutMs) =>
   relay.request(command, payload, timeoutMs);
 
-const browserServer = new McpServer({
-  name: "aionda-browser-mcp",
-  version: "0.3.1",
-});
+const SERVER_INSTRUCTIONS = `Controls the user's real Chrome. Several AI agents use this browser at the same time, each in its own tab, often on the same website (for example two agents editing two different emails on outlook.com).
+
+Rules:
+1. Claim a tab before any page tool. Call browser_open_tab with {url} (preferred: always your own new tab), or browser_list_tabs and then browser_attach with {tabId} of a tab whose otherAgents is 0. Page tools (snapshot, click, type, press_key, scroll, navigate, screenshot, evaluate, upload) fail until you have claimed a tab.
+2. Never use another agent's tab. browser_attach refuses tabs claimed by another agent. For the same website, open a second tab with browser_open_tab.
+3. Stay in your tab. Use browser_navigate in your claimed tab instead of switching tabs. If your tab was closed, claim a new one.
+4. Screenshots and coordinate clicks bring your tab to the front and wait for other agents' screenshots and coordinate clicks. Prefer browser_snapshot_compact, browser_click and browser_type, which run in parallel. Open tabs, not windows: use newWindow: true only when the user asks for a separate window.
+5. chrome:// pages cannot be controlled.`;
+
+const browserServer = new McpServer(
+  {
+    name: "aionda-browser-mcp",
+    version: "0.3.1",
+  },
+  { instructions: SERVER_INSTRUCTIONS }
+);
 
 browserServer.tool("browser_status", "Return relay and attached-tab status.", {}, async () => {
   return textResult(await relay.request("status", {}, options.timeoutMs));
@@ -49,19 +61,19 @@ browserServer.tool("browser_tab", "Return the currently attached browser tab.", 
 
 browserServer.tool(
   "browser_attach",
-  "Select a Chrome tab for this MCP session, independent of other clients. Provide tabId from browser_list_tabs or urlContains.",
+  "Claim an existing Chrome tab for this agent (required before page tools unless you use browser_open_tab). Select by tabId (from browser_list_tabs) or urlContains; without either, the active http(s) tab is used. Tabs claimed by another agent are refused. followActive: true releases your tab; page tools then fail until you claim one again.",
   { urlContains: z.string().optional(), tabId: z.number().int().positive().optional(), followActive: z.boolean().optional() },
   async ({ urlContains, tabId, followActive }) => textResult(await sendCommand("attach", compactPayload({ urlContains, tabId, followActive }), 5000))
 );
 
 browserServer.tool(
   "browser_open_tab",
-  "Open a URL in a new tab (or window) and attach it to this MCP session.",
+  "Open a URL in a new tab and claim it for this agent. Start here: page tools only run in a claimed tab, and other AI agents use this browser at the same time. Also use it for a second tab on a website another agent already uses. newWindow: true opens a window instead; use it only when the user asks.",
   { url: z.string().url(), newWindow: z.boolean().optional(), active: z.boolean().optional() },
   async ({ url, newWindow, active }) => textResult(await sendCommand("openTab", compactPayload({ url, newWindow, active }), 5000))
 );
 
-browserServer.tool("browser_list_tabs", "List normal Chrome tabs visible to the extension.", {}, async () => {
+browserServer.tool("browser_list_tabs", "List normal Chrome tabs. attachedHere marks the tab this agent claimed; otherAgents > 0 means another agent claimed it, so do not attach it.", {}, async () => {
   return textResult(await sendCommand("listTabs", {}, 5000));
 });
 
